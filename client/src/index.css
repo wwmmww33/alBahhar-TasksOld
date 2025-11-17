@@ -1,0 +1,92 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------- */
+/*          نظام الثيمات والألوان             */
+/* ----------------------------------------- */
+
+/* الوضع العادي (Light Mode) */
+:root {
+  --color-bkg: 240 5% 96%; /* gray-100 */
+  --color-content: 240 10% 4%; /* gray-900 */
+  --color-content-secondary: 240 4% 46%; /* gray-500 */
+}
+
+/* الوضع الليلي (Dark Mode) */
+.dark {
+  --color-bkg: 222 84% 5%; /* أزرق داكن جداً للخلفية */
+  --color-content: 210 40% 98%; /* أبيض مائل للأزرق للنص الرئيسي */
+  --color-content-secondary: 215 20% 65%; /* رمادي مائل للأزرق للنص الثانوي */
+}
+
+/* --- تعريف الثيمات --- */
+
+.theme-blue {
+  --color-primary-light: 214 90% 90%;
+  --color-primary-default: 220 85% 60%;
+  --color-primary-dark: 221 83% 53%;
+}
+
+/* تحسينات إضافية للوضع الليلي */
+.dark .theme-blue {
+  --color-primary-light: 214 100% 85%;
+  --color-primary-default: 220 100% 70%;
+  --color-primary-dark: 221 100% 65%;
+}
+
+.theme-green {
+  --color-primary-light: 145 70% 90%;
+  --color-primary-default: 145 63% 49%;
+  --color-primary-dark: 145 67% 42%;
+}
+
+.dark .theme-green {
+  --color-primary-light: 145 80% 85%;
+  --color-primary-default: 145 70% 60%;
+  --color-primary-dark: 145 75% 55%;
+}
+
+.theme-purple {
+  --color-primary-light: 262 80% 90%;
+  --color-primary-default: 262 85% 60%;
+  --color-primary-dark: 262 83% 53%;
+}
+
+.dark .theme-purple {
+  --color-primary-light: 262 90% 85%;
+  --color-primary-default: 262 95% 70%;
+  --color-primary-dark: 262 90% 65%;
+}
+
+.theme-orange {
+  --color-primary-light: 25 95% 90%;
+  --color-primary-default: 25 95% 53%;
+  --color-primary-dark: 25 94% 47%;
+}
+
+.dark .theme-orange {
+  --color-primary-light: 25 100% 85%;
+  --color-primary-default: 25 100% 65%;
+  --color-primary-dark: 25 95% 60%;
+}
+
+/* ألوان إضافية للوضع الليلي */
+.dark {
+  /* ألوان الخلفيات */
+  --color-surface: 220 13% 18%; /* خلفية البطاقات */
+  --color-surface-hover: 220 13% 22%; /* خلفية البطاقات عند التمرير */
+  --color-border: 220 13% 28%; /* لون الحدود */
+  --color-border-light: 220 13% 35%; /* لون الحدود الفاتحة */
+  
+  /* ألوان الحالات للوضع الليلي */
+  --color-success: 142 76% 36%; /* أخضر داكن */
+  --color-success-bg: 142 76% 6%; /* خلفية خضراء داكنة */
+  --color-warning: 38 92% 50%; /* أصفر برتقالي */
+  --color-warning-bg: 38 92% 8%; /* خلفية صفراء داكنة */
+  --color-error: 0 84% 60%; /* أحمر فاتح */
+  --color-error-bg: 0 84% 8%; /* خلفية حمراء داكنة */
+  --color-info: 199 89% 48%; /* أزرق معلوماتي */
+  --color-info-bg: 199 89% 8%; /* خلفية زرقاء داكنة */
+}

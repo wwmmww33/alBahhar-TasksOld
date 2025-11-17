@@ -1,0 +1,434 @@
+// src/components/DelegationManagement.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import { Edit, Trash2, Plus, CheckCircle, XCircle } from 'lucide-react';
+
+type User = {
+  UserID: string;
+  FullName: string;
+  DepartmentName: string | null;
+};
+
+type Delegation = {
+  DelegationID: number;
+  DelegatorID: string;
+  DelegatorName: string;
+  DelegateID: string;
+  DelegateName: string;
+  StartDate: string;
+  EndDate: string | null;
+  IsActive: boolean;
+  CreatedAt: string;
+};
+
+type NewDelegation = {
+  DelegateID: string;
+  StartDate: string;
+  EndDate: string;
+};
+
+const DelegationManagement = () => {
+  const [delegations, setDelegations] = useState<Delegation[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [editingDelegation, setEditingDelegation] = useState<Delegation | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newDelegation, setNewDelegation] = useState<NewDelegation>({
+    DelegateID: '',
+    StartDate: '',
+    EndDate: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const userId = localStorage.getItem('currentUserId');
+      const headers = {
+        'user-id': userId || '',
+        'Content-Type': 'application/json'
+      };
+      
+      const [delegationsRes, usersRes] = await Promise.all([
+        fetch('/api/delegations', { headers }),
+        fetch('/api/users', { headers })
+      ]);
+      
+      if (!delegationsRes.ok || !usersRes.ok) {
+        throw new Error('فشل في جلب البيانات');
+      }
+      
+      const delegationsData = await delegationsRes.json();
+      const usersData = await usersRes.json();
+      
+      setDelegations(delegationsData);
+      setUsers(usersData.filter((user: User) => user.UserID !== localStorage.getItem('currentUserId')));
+      setError(null);
+    } catch (error) {
+      console.error('Failed to fetch data:', error);
+      setError('فشل في جلب البيانات');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDelegation.DelegateID || !newDelegation.StartDate) return;
+    
+    try {
+      setLoading(true);
+      const userId = localStorage.getItem('currentUserId');
+      const response = await fetch('/api/delegations', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'user-id': userId || ''
+        },
+        body: JSON.stringify(newDelegation),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'فشل في إنشاء التفويض');
+      }
+      
+      setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '' });
+      setShowCreateForm(false);
+      fetchData();
+      setError(null);
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDelegation) return;
+    
+    try {
+      setLoading(true);
+      const userId = localStorage.getItem('currentUserId');
+      const response = await fetch(`/api/delegations/${editingDelegation.DelegationID}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'user-id': userId || ''
+        },
+        body: JSON.stringify({
+          StartDate: editingDelegation.StartDate,
+          EndDate: editingDelegation.EndDate,
+          IsActive: editingDelegation.IsActive
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'فشل في تحديث التفويض');
+      }
+      
+      setEditingDelegation(null);
+      fetchData();
+      setError(null);
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (delegationId: number) => {
+    if (!confirm('هل أنت متأكد من حذف هذا التفويض؟')) return;
+    
+    try {
+      setLoading(true);
+      const userId = localStorage.getItem('currentUserId');
+      const response = await fetch(`/api/delegations/${delegationId}`, {
+        method: 'DELETE',
+        headers: {
+          'user-id': userId || ''
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'فشل في حذف التفويض');
+      }
+      
+      fetchData();
+      setError(null);
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('ar-SA');
+  };
+
+  const isExpired = (endDate: string | null) => {
+    if (!endDate) return false;
+    return new Date(endDate) < new Date();
+  };
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          {error}
+        </div>
+      )}
+      
+      {/* زر إنشاء تفويض جديد */}
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-semibold text-content">إدارة التفويضات</h2>
+        <button
+          onClick={() => setShowCreateForm(true)}
+          className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-md hover:bg-primary-dark"
+          disabled={loading}
+        >
+          <Plus size={16} />
+          تفويض جديد
+        </button>
+      </div>
+
+      {/* نموذج إنشاء تفويض جديد */}
+      {showCreateForm && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border">
+          <h3 className="text-lg font-semibold mb-4 text-content">إنشاء تفويض جديد</h3>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-content mb-1">
+                المفوض إليه
+              </label>
+              <select
+                value={newDelegation.DelegateID}
+                onChange={(e) => setNewDelegation({...newDelegation, DelegateID: e.target.value})}
+                required
+                className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+              >
+                <option value="">-- اختر المستخدم --</option>
+                {users.map(user => (
+                  <option key={user.UserID} value={user.UserID}>
+                    {user.FullName} ({user.DepartmentName || 'بدون قسم'})
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-content mb-1">
+                تاريخ البداية
+              </label>
+              <input
+                type="date"
+                value={newDelegation.StartDate}
+                onChange={(e) => setNewDelegation({...newDelegation, StartDate: e.target.value})}
+                required
+                className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-content mb-1">
+                تاريخ النهاية (اختياري)
+              </label>
+              <input
+                type="date"
+                value={newDelegation.EndDate}
+                onChange={(e) => setNewDelegation({...newDelegation, EndDate: e.target.value})}
+                className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+              />
+            </div>
+            
+            <div className="flex gap-2 pt-4">
+              <button
+                type="submit"
+                disabled={loading}
+                className="bg-primary text-white px-4 py-2 rounded hover:bg-primary-dark disabled:opacity-50"
+              >
+                {loading ? 'جاري الإنشاء...' : 'إنشاء التفويض'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '' });
+                }}
+                className="border border-content/20 text-content px-4 py-2 rounded hover:bg-content/5"
+              >
+                إلغاء
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* جدول التفويضات */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-right">
+            <thead className="bg-gray-50 dark:bg-gray-700 border-b border-content/10">
+              <tr>
+                <th className="p-4 font-semibold text-content">الحالة</th>
+                <th className="p-4 font-semibold text-content">المفوض</th>
+                <th className="p-4 font-semibold text-content">المفوض إليه</th>
+                <th className="p-4 font-semibold text-content">تاريخ البداية</th>
+                <th className="p-4 font-semibold text-content">تاريخ النهاية</th>
+                <th className="p-4 font-semibold text-content">تاريخ الإنشاء</th>
+                <th className="p-4 font-semibold text-content">إجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && delegations.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-content-secondary">
+                    جاري التحميل...
+                  </td>
+                </tr>
+              ) : delegations.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-content-secondary">
+                    لا توجد تفويضات
+                  </td>
+                </tr>
+              ) : (
+                delegations.map(delegation => (
+                  <tr key={delegation.DelegationID} className="border-b border-content/10 hover:bg-content/5">
+                    <td className="p-4">
+                      <div className="flex items-center gap-2">
+                        {delegation.IsActive && !isExpired(delegation.EndDate) ? (
+                          <CheckCircle size={18} className="text-green-500" aria-label="نشط" />
+                        ) : (
+                          <XCircle size={18} className="text-red-500" aria-label="غير نشط" />
+                        )}
+                        <span className={`text-xs px-2 py-1 rounded ${
+                          delegation.IsActive && !isExpired(delegation.EndDate)
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {delegation.IsActive && !isExpired(delegation.EndDate) ? 'نشط' : 'غير نشط'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-4 text-content">{delegation.DelegatorName}</td>
+                    <td className="p-4 text-content">{delegation.DelegateName}</td>
+                    <td className="p-4 text-content">{formatDate(delegation.StartDate)}</td>
+                    <td className="p-4 text-content">
+                      {delegation.EndDate ? formatDate(delegation.EndDate) : 'غير محدد'}
+                    </td>
+                    <td className="p-4 text-content">{formatDate(delegation.CreatedAt)}</td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setEditingDelegation(delegation)}
+                          className="text-primary hover:text-primary-dark"
+                          title="تعديل"
+                        >
+                          <Edit size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(delegation.DelegationID)}
+                          className="text-red-500 hover:text-red-700"
+                          title="حذف"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* نموذج التعديل */}
+      {editingDelegation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-content">تعديل التفويض</h3>
+            <form onSubmit={handleUpdate} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-content mb-1">
+                  المفوض: {editingDelegation.DelegatorName}
+                </label>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-content mb-1">
+                  المفوض إليه: {editingDelegation.DelegateName}
+                </label>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-content mb-1">
+                  تاريخ البداية
+                </label>
+                <input
+                  type="date"
+                  value={editingDelegation.StartDate.split('T')[0]}
+                  onChange={(e) => setEditingDelegation({...editingDelegation, StartDate: e.target.value})}
+                  required
+                  className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-content mb-1">
+                  تاريخ النهاية
+                </label>
+                <input
+                  type="date"
+                  value={editingDelegation.EndDate ? editingDelegation.EndDate.split('T')[0] : ''}
+                  onChange={(e) => setEditingDelegation({...editingDelegation, EndDate: e.target.value || null})}
+                  className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+                />
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="isActive"
+                  checked={editingDelegation.IsActive}
+                  onChange={(e) => setEditingDelegation({...editingDelegation, IsActive: e.target.checked})}
+                  className="h-4 w-4 rounded text-primary focus:ring-primary"
+                />
+                <label htmlFor="isActive" className="text-sm font-medium text-content">
+                  التفويض نشط
+                </label>
+              </div>
+              
+              <div className="flex gap-2 pt-4">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-primary text-white px-4 py-2 rounded hover:bg-primary-dark disabled:opacity-50"
+                >
+                  {loading ? 'جاري الحفظ...' : 'حفظ التغييرات'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingDelegation(null)}
+                  className="border border-content/20 text-content px-4 py-2 rounded hover:bg-content/5"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default DelegationManagement;

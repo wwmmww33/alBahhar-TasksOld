@@ -1,0 +1,410 @@
+// src/pages/TaskDetail.tsx
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import UnifiedTimeline from '../components/UnifiedTimeline';
+import { useNotification } from '../contexts/NotificationContext';
+import type { CurrentUser, Subtask, User, Category, Task, Comment } from '../types';
+import { Trash2, ExternalLink } from 'lucide-react';
+import { getApiUrl } from '../config/api';
+
+type TaskDetailProps = { currentUser: CurrentUser; };
+
+const TaskDetail = ({ currentUser }: TaskDetailProps) => {
+  const { taskId } = useParams<{ taskId: string }>();
+  const navigate = useNavigate();
+  const { markTaskAsViewed, refreshTasks, refreshNotifications } = useNotification();
+  const [task, setTask] = useState<Task | null>(null);
+  const [subtasks, setSubtasks] = useState<Subtask[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [usersInDepartment, setUsersInDepartment] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isEditingCategory, setIsEditingCategory] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
+  const [isUpdatingCategory, setIsUpdatingCategory] = useState(false);
+
+  const fetchAllDetails = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const taskRes = await fetch(getApiUrl(`tasks/${taskId}?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`));
+      if (!taskRes.ok) {
+        if (taskRes.status === 403) {
+          throw new Error('ليس لديك صلاحية للوصول إلى هذه المهمة.');
+        }
+        throw new Error('Failed to fetch task details.');
+      }
+      const taskData: Task = await taskRes.json();
+      setTask(taskData);
+      
+      // تسجيل المهمة كمشاهدة
+      markTaskAsViewed(parseInt(taskId));
+      
+      // تحديث إشعارات التعليقات كمقروءة
+      try {
+        await fetch(getApiUrl(`comment-notifications/task/${taskId}/user/${currentUser.UserID}/mark-read`), {
+          method: 'PUT'
+        });
+        // تحديث قائمة المهام لإخفاء الإشعارات
+        refreshTasks();
+      } catch (error) {
+        console.error('خطأ في تحديث إشعارات التعليقات:', error);
+      }
+
+      if (taskData) {
+        const [subtasksRes, commentsRes, usersRes] = await Promise.all([
+          fetch(getApiUrl(`tasks/${taskId}/subtasks?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)),
+          fetch(getApiUrl(`tasks/${taskId}/comments?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)),
+          fetch(getApiUrl(`tasks/department/${taskData.DepartmentID}/users`)),
+        ]);
+        
+        // التحقق من صلاحية الوصول للمهام الفرعية
+        if (subtasksRes.status === 403) {
+          setError('ليس لديك صلاحية لعرض المهام الفرعية لهذه المهمة.');
+          return;
+        }
+        
+        // التحقق من صلاحية الوصول للتعليقات
+        if (commentsRes.status === 403) {
+          setError('ليس لديك صلاحية لعرض التعليقات لهذه المهمة.');
+          return;
+        }
+        
+        const subtasksData = await subtasksRes.json();
+        const commentsData = await commentsRes.json();
+        const usersData = await usersRes.json();
+        setSubtasks(subtasksData);
+        setComments(commentsData);
+        setUsersInDepartment(usersData);
+      }
+    } catch (err: any) { setError(err.message); } 
+    finally { setIsLoading(false); }
+  }, [taskId, currentUser.UserID, currentUser.IsAdmin]);
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      const response = await fetch(getApiUrl(`categories/department/${currentUser.DepartmentID}`));
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(data.Categories || data);
+      }
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+    }
+  }, [currentUser.DepartmentID]);
+
+  const handleUpdateTaskCategory = async (categoryId: number | null) => {
+    if (!task || isUpdatingCategory) return;
+    setIsUpdatingCategory(true);
+    try {
+      const response = await fetch(getApiUrl(`tasks/${task.TaskID}/category`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ CategoryID: categoryId })
+      });
+      
+      if (response.ok) {
+        await fetchAllDetails();
+        setIsEditingCategory(false);
+        setSelectedCategoryId(null);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'فشل في تحديث التصنيف');
+      }
+    } catch (error) {
+      console.error('Failed to update task category:', error);
+      setError('حدث خطأ أثناء تحديث التصنيف');
+    } finally {
+      setIsUpdatingCategory(false);
+    }
+  };
+
+  useEffect(() => { 
+    fetchAllDetails();
+    fetchCategories();
+    updateTaskView();
+  }, [fetchAllDetails, fetchCategories]);
+
+  const updateTaskView = async () => {
+    if (!taskId) return;
+    try {
+      await fetch(getApiUrl(`tasks/${taskId}/view`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: currentUser.UserID }),
+      });
+    } catch (error) {
+      console.error('Error updating task view:', error);
+    }
+  };
+
+  const handleCommentSubmit = async (commentData: string | { content: string; customDateTime: string | null }) => {
+    setIsSubmittingComment(true);
+    try {
+        // التعامل مع البيانات القديمة (string) والجديدة (object)
+        let content: string;
+        let createdAt: string | null = null;
+        
+        if (typeof commentData === 'string') {
+            content = commentData;
+        } else {
+            content = commentData.content;
+            createdAt = commentData.customDateTime;
+        }
+        
+        const requestBody: any = {
+            TaskID: taskId,
+            UserID: currentUser.UserID,
+            Content: content
+        };
+        
+        // إضافة التاريخ المخصص إذا تم تمريره
+        if (createdAt) {
+            requestBody.CreatedAt = createdAt;
+        }
+        
+        const res = await fetch(getApiUrl('comments'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+        if (!res.ok) {
+          throw new Error('فشل إرسال التعليق');
+        }
+        // تحديث تفاصيل المهمة
+        await fetchAllDetails();
+        // تحديث الإشعارات والقائمة فورًا
+        refreshNotifications();
+        refreshTasks();
+    } catch (error) { 
+        console.error("Failed to submit comment", error);
+        throw error;
+    } finally { 
+        setIsSubmittingComment(false); 
+    }
+  };
+
+  const handleUpdateTaskStatus = async (newStatus: string) => {
+    if (!task) return;
+    try {
+        await fetch(getApiUrl(`tasks/${task.TaskID}/status`), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ Status: newStatus })
+        });
+        fetchAllDetails();
+    } catch (error) { console.error("Failed to update task status:", error); }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!taskId || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(getApiUrl(`tasks/${taskId}`), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.UserID })
+      });
+      
+      if (response.ok) {
+        navigate('/tasks');
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'فشل في حذف المهمة');
+      }
+    } catch (error) {
+      console.error('Failed to delete task:', error);
+      setError('حدث خطأ أثناء حذف المهمة');
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  if (isLoading) return <p className="text-center p-8">جاري تحميل تفاصيل المهمة...</p>;
+  if (error) return <p className="text-center p-8 text-red-500">حدث خطأ: {error}</p>;
+  if (!task) return <p className="text-center p-8">لم يتم العثور على المهمة.</p>;
+
+  const canCloseTask = currentUser.UserID === task.CreatedBy || currentUser.IsAdmin;
+  const canDeleteTask = currentUser.UserID === task.CreatedBy;
+
+  return (
+    <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md max-w-4xl mx-auto">
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-4xl font-bold text-content mb-2">{task.Title}</h1>
+          <div className="flex flex-wrap items-center gap-4 text-content-secondary mb-6">
+            <span>المنشيء: {task.CreatedByName || task.CreatedBy}</span>
+            <span className="text-sm">•</span>
+            <span><strong>الحالة:</strong> <span className="font-semibold">{task.Status}</span></span>
+            <span className="text-sm">•</span>
+            <span><strong>الأولوية:</strong> {task.Priority}</span>
+            <span className="text-sm">•</span>
+            <span><strong>تاريخ الاستحقاق:</strong> {task.DueDate ? new Date(task.DueDate).toLocaleDateString('ar-EG') : 'غير محدد'}</span>
+          </div>
+          
+          {/* Category Section */}
+          <div className="flex flex-wrap items-center gap-4 text-content-secondary mb-2">
+            <span><strong>التصنيف:</strong></span>
+            {isEditingCategory ? (
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedCategoryId || ''}
+                  onChange={(e) => setSelectedCategoryId(e.target.value ? parseInt(e.target.value) : null)}
+                  className="p-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-content text-sm"
+                >
+                  <option value="">بدون تصنيف</option>
+                  {categories.map((category) => (
+                    <option key={category.CategoryID} value={category.CategoryID}>
+                      {category.Name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => handleUpdateTaskCategory(selectedCategoryId)}
+                  disabled={isUpdatingCategory}
+                  className="px-2 py-1 bg-primary text-white rounded-md hover:bg-primary/90 disabled:bg-gray-400 text-sm"
+                >
+                  {isUpdatingCategory ? 'جاري الحفظ...' : 'حفظ'}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsEditingCategory(false);
+                    setSelectedCategoryId(task.CategoryID || null);
+                  }}
+                  className="px-2 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 text-sm"
+                >
+                  إلغاء
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {task.CategoryName ? (
+                  <>
+                    <span className="text-content font-medium">{task.CategoryName}</span>
+                    <Link
+                      to={`/categories/${task.CategoryID}`}
+                      className="text-primary hover:underline flex items-center gap-1 text-sm"
+                    >
+                      <ExternalLink size={14} />
+                      عرض معلومات التصنيف
+                    </Link>
+                    {canCloseTask && (
+                      <button
+                        onClick={() => {
+                          setIsEditingCategory(true);
+                          setSelectedCategoryId(task.CategoryID || null);
+                        }}
+                        className="text-sm text-primary hover:underline"
+                      >
+                        تعديل
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-content-secondary italic">بدون تصنيف</span>
+                    {canCloseTask && (
+                      <button
+                        onClick={() => {
+                          setIsEditingCategory(true);
+                          setSelectedCategoryId(null);
+                        }}
+                        className="text-sm text-primary hover:underline"
+                      >
+                        إضافة تصنيف
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="prose dark:prose-invert max-w-none"><p>{task.Description || 'لا يوجد وصف لهذه المهمة.'}</p></div>
+
+      {canCloseTask && (
+        <div className="mt-6 p-4 bg-content/5 rounded-md flex items-center justify-between flex-wrap gap-2">
+            <p className="font-semibold text-content">إجراءات المهمة الرئيسية:</p>
+            <div className="flex gap-2 flex-wrap">
+                <button onClick={() => handleUpdateTaskStatus('approved-in-progress')} disabled={task.Status === 'approved-in-progress'} className="text-sm bg-emerald-500 text-white px-3 py-1 rounded disabled:bg-gray-400">اكمال الاجراءات بعد الاعتماد</button>
+                <button onClick={() => handleUpdateTaskStatus('completed')} disabled={task.Status === 'completed'} className="text-sm bg-green-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إغلاق كمكتملة</button>
+                <button onClick={() => handleUpdateTaskStatus('cancelled')} disabled={task.Status === 'cancelled'} className="text-sm bg-red-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إلغاء المهمة</button>
+                <button onClick={() => handleUpdateTaskStatus('external')} disabled={task.Status === 'external'} className="text-sm bg-orange-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إسناد لجهة خارجية</button>
+                {(task.Status === 'completed' || task.Status === 'cancelled' || task.Status === 'external' || task.Status === 'approved-in-progress') && (<button onClick={() => handleUpdateTaskStatus('open')} className="text-sm bg-gray-500 text-white px-3 py-1 rounded">إعادة الفتح</button>)}
+                {canDeleteTask && (
+                  <button 
+                    onClick={() => setShowDeleteConfirm(true)} 
+                    className="text-sm bg-red-700 text-white px-3 py-1 rounded hover:bg-red-800 transition-colors flex items-center gap-1"
+                  >
+                    <Trash2 size={14} />
+                    حذف نهائياً
+                  </button>
+                )}
+            </div>
+        </div>
+      )}
+      
+
+      <hr className="my-8 border-content/10" />
+      <UnifiedTimeline 
+        taskId={taskId!}
+        subtasks={subtasks}
+        comments={comments}
+        users={usersInDepartment}
+        currentUser={currentUser}
+        task={task}
+        onSubtaskUpdate={fetchAllDetails}
+        onCommentSubmit={handleCommentSubmit}
+        isSubmittingComment={isSubmittingComment}
+      />
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-red-600 dark:text-red-400 mb-4">تأكيد الحذف</h2>
+            <p className="text-content mb-6">
+              هل أنت متأكد من حذف المهمة "{task.Title}" نهائياً؟
+              <br />
+              <span className="text-red-600 dark:text-red-400 font-semibold">
+                سيتم حذف جميع المهام الفرعية والتعليقات المرتبطة بها ولا يمكن التراجع عن هذا الإجراء.
+              </span>
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button 
+                onClick={() => setShowDeleteConfirm(false)} 
+                className="px-4 py-2 text-content bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                إلغاء
+              </button>
+              <button 
+                onClick={handleDeleteTask} 
+                disabled={isDeleting}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-red-400 transition-colors flex items-center gap-2"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    جاري الحذف...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} />
+                    حذف نهائياً
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+export default TaskDetail;
