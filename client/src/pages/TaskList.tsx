@@ -1,5 +1,5 @@
 // src/pages/TaskList.tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import TaskCard from '../components/TaskCard';
 import SearchBar from '../components/SearchBar';
 import { useNotification } from '../contexts/NotificationContext';
@@ -44,6 +44,8 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   
   // 3. حالة جديدة للبحث
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // 3.1 إضافة فلتر الأشخاص (اختياري)
+  const [assigneeFilterUserId, setAssigneeFilterUserId] = useState<string | null>(null);
   
   // 4. حالة جديدة للتبويبات
   const [activeTab, setActiveTab] = useState<'active' | 'external' | 'approved' | 'completed' | 'actioned'>('active');
@@ -364,6 +366,23 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   };
 
   // 5. فلترة المهام حسب الوضع المحدد والبحث
+  // بناء قائمة الأشخاص المتاحين من المهام الفرعية الموجودة حالياً
+  const assigneeOptions = useMemo(() => {
+    const map = new Map<string, string | undefined>();
+    tasks.forEach(task => {
+      (task.subtasks || []).forEach(st => {
+        if (st.AssignedTo) {
+          // استخدام الاسم إن وجد، وإلا نبقي المعرف فقط
+          map.set(st.AssignedTo, (st as any).AssignedToName);
+        }
+      });
+    });
+    // ترتيب أبجدي حسب الاسم إن وجد، وإلا حسب المعرف
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name: name || id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [tasks]);
+
   const filteredTasks = tasks.filter(task => {
     // فلتر حسب المنشئ
     const matchesFilter = filterMode === 'all' || task.CreatedBy === currentUser.UserID;
@@ -381,8 +400,15 @@ const TaskList = ({ currentUser }: TaskListProps) => {
       (task.comments && task.comments.some(comment => 
         comment.Content.toLowerCase().includes(searchTerm.toLowerCase())
       ));
+
+    // فلتر حسب الشخص المختار: عند اختيار شخص معيّن، نعرض فقط المهام التي تحتوي
+    // على مهام فرعية غير مكتملة مسندة له، ونستبعد المهام التي لا تحتوي على مهام فرعية إطلاقاً
+    const matchesAssignee = !assigneeFilterUserId
+      ? true
+      : !!(task.subtasks && task.subtasks.length > 0 &&
+           task.subtasks.some(st => !st.IsCompleted && st.AssignedTo === assigneeFilterUserId));
     
-    return matchesFilter && matchesSearch;
+    return matchesFilter && matchesSearch && matchesAssignee;
   });
 
 
@@ -541,34 +567,60 @@ const TaskList = ({ currentUser }: TaskListProps) => {
           </div>
           
           {/* فلتر المهام */}
-          <div className="flex items-center gap-4">
-            <Filter className="text-primary" size={20} />
-            <span className="font-medium text-content">عرض المهام:</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setFilterMode('all')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
-                  filterMode === 'all'
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-100 dark:bg-gray-700 text-content hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-              >
-                <Users size={16} />
-                جميع المهام
-              </button>
-              <button
-                onClick={() => setFilterMode('my-created')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
-                  filterMode === 'my-created'
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-100 dark:bg-gray-700 text-content hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-              >
-                <User size={16} />
-                المهام التي أنشأتها
-              </button>
-            </div>
-          </div>
+      <div className="flex items-center gap-4">
+        <Filter className="text-primary" size={20} />
+        <span className="font-medium text-content">عرض المهام:</span>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setFilterMode('all')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+              filterMode === 'all'
+                ? 'bg-primary text-white'
+                : 'bg-gray-100 dark:bg-gray-700 text-content hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            <Users size={16} />
+            جميع المهام
+          </button>
+          <button
+            onClick={() => setFilterMode('my-created')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+              filterMode === 'my-created'
+                ? 'bg-primary text-white'
+                : 'bg-gray-100 dark:bg-gray-700 text-content hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            <User size={16} />
+            المهام التي أنشأتها
+          </button>
+        </div>
+      </div>
+
+      {/* فلتر أسماء الأشخاص */}
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-content">حسب الشخص:</span>
+        <select
+          value={assigneeFilterUserId ?? ''}
+          onChange={(e) => {
+            const val = e.target.value;
+            setAssigneeFilterUserId(val ? val : null);
+          }}
+          className="px-3 py-2 rounded-md bg-gray-100 dark:bg-gray-700 text-content hover:bg-gray-200 dark:hover:bg-gray-600"
+        >
+          <option value="">جميع الأشخاص</option>
+          {assigneeOptions.map(opt => (
+            <option key={opt.id} value={opt.id}>{opt.name}</option>
+          ))}
+        </select>
+        {assigneeFilterUserId && (
+          <button
+            onClick={() => setAssigneeFilterUserId(null)}
+            className="px-2 py-1 text-sm rounded-md bg-gray-200 dark:bg-gray-600"
+          >
+            مسح الفلتر
+          </button>
+        )}
+      </div>
           
           {/* أزرار التحكم في الاختيار */}
           {isSelectionMode && (
