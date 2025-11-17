@@ -25,6 +25,8 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
   const [extraPersonalEvents, setExtraPersonalEvents] = useState<PersonalEventItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newEventTitle, setNewEventTitle] = useState('');
+  // وضع الفلترة للتقويم: مشترك، خاص، أو كلاهما
+  const [viewFilter, setViewFilter] = useState<'both' | 'shared' | 'personal'>('both');
   const getTodayStr = () => {
     const d = new Date();
     const y = d.getFullYear();
@@ -174,6 +176,25 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
           <h2 className="text-lg font-bold">التقويم</h2>
         </div>
         <p className="text-xs text-content-secondary mt-1">يعرض الأحداث خلال 30 يوماً القادمة.</p>
+        {/* عناصر التحكم بالفلترة */}
+        <div className="flex items-center gap-1 mt-2">
+          <span className="text-xs text-content-secondary">عرض:</span>
+          <button
+            type="button"
+            onClick={() => setViewFilter('both')}
+            className={`px-2 py-1 text-xs rounded border ${viewFilter === 'both' ? 'bg-primary text-white border-primary' : 'bg-white dark:bg-gray-700 text-content border-content/20'}`}
+          >مشترك + خاص</button>
+          <button
+            type="button"
+            onClick={() => setViewFilter('shared')}
+            className={`px-2 py-1 text-xs rounded border ${viewFilter === 'shared' ? 'bg-primary text-white border-primary' : 'bg-white dark:bg-gray-700 text-content border-content/20'}`}
+          >مشترك فقط</button>
+          <button
+            type="button"
+            onClick={() => setViewFilter('personal')}
+            className={`px-2 py-1 text-xs rounded border ${viewFilter === 'personal' ? 'bg-primary text-white border-primary' : 'bg-white dark:bg-gray-700 text-content border-content/20'}`}
+          >خاص فقط</button>
+        </div>
       </div>
       {/* نموذج إضافة حدث خاص */}
       <form
@@ -230,7 +251,8 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
         <div className="text-sm text-content-secondary">جاري التحميل...</div>
       ) : (
         <div className="space-y-4">
-          {items.length === 0 && extraItems.length === 0 && (
+          {/* رسالة عدم وجود أحداث حسب الفلتر */}
+          {(viewFilter === 'shared' ? (items.length === 0) : viewFilter === 'personal' ? (personalEvents.length === 0) : (items.length === 0 && personalEvents.length === 0)) && (
             <div className="p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-700 text-xs text-yellow-800 dark:text-yellow-200">
               لا توجد أحداث في هذا النطاق.
               تأكد من وجود مهام فرعية بتاريخ استحقاق ضمن 30 يومًا وتفعيل خيار "إظهار في التقويم".
@@ -251,7 +273,9 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                 const key = `${ev.getFullYear()}-${String(ev.getMonth() + 1).padStart(2, '0')}-${String(ev.getDate()).padStart(2, '0')}`;
                 return key === d.key;
               });
-              const hasEvents = dayItems.length > 0;
+              const visibleShared = viewFilter !== 'personal' ? dayItems : [];
+              const visiblePersonal = viewFilter !== 'shared' ? dayPersonal : [];
+              const hasEvents = visibleShared.length > 0 || visiblePersonal.length > 0;
               const isWeekend = d.date.getDay() === 5 || d.date.getDay() === 6; // الجمعة=5، السبت=6
               return (
                 <li
@@ -269,9 +293,9 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                   }
                 >
                   <div className={`text-xs font-semibold mb-1 ${hasEvents ? 'text-black' : 'text-content'} text-right`}>{d.label}</div>
-                  {hasEvents && (
+                  {visibleShared.length > 0 && (
                     <div className="space-y-1 text-right">
-                      {dayItems.map((item) => (
+                      {visibleShared.map((item) => (
                         <div key={item.SubtaskID} className="text-xs">
                           <button
                             type="button"
@@ -285,9 +309,9 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                       ))}
                     </div>
                   )}
-                  {dayPersonal.length > 0 && (
+                  {visiblePersonal.length > 0 && (
                     <div className="space-y-1 text-right mt-1">
-                      {dayPersonal.map((pe) => (
+                      {visiblePersonal.map((pe) => (
                         <div key={pe.EventID} className="text-xs">
                           <span className="font-semibold text-green-800 dark:text-green-200 text-right">{pe.Title}</span>
                           <span className="ml-1 inline-block text-[10px] text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30 px-1 py-[1px] rounded">(خاص)</span>
@@ -300,11 +324,11 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
             })}
           </ul>
 
-          {extraItems.length > 0 && (
+          {((viewFilter !== 'personal' && extraItems.length > 0) || (viewFilter !== 'shared' && extraPersonalEvents.length > 0)) && (
             <div>
               <h3 className="text-sm font-bold text-content mb-2">أحداث بعد 30 يوم</h3>
               <ul className="space-y-2">
-                {extraItems.map((item) => (
+                {viewFilter !== 'personal' && extraItems.map((item) => (
                   <li key={item.SubtaskID} className="p-2 rounded bg-white/60 dark:bg-gray-800/60 border border-content/10 text-right">
                     <div className="text-xs text-content-secondary mb-1">
                       {new Date(item.DueDate).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -321,7 +345,7 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                     </div>
                   </li>
                 ))}
-                {extraPersonalEvents.map((pe) => (
+                {viewFilter !== 'shared' && extraPersonalEvents.map((pe) => (
                   <li key={pe.EventID} className="p-2 rounded bg-white/60 dark:bg-gray-800/60 border border-content/10 text-right">
                     <div className="text-xs text-content-secondary mb-1">
                       {new Date(pe.EventDate).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}
