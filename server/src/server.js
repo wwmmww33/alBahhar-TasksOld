@@ -1,6 +1,7 @@
 // src/server.js
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const sql = require('mssql');
 const cors = require('cors');
 
@@ -10,7 +11,30 @@ const port = process.env.PORT || 5001;
 // --- Middlewares ---
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'dist')));
+
+// تهيئة خدمة الملفات الثابتة للواجهة الأمامية (dist) بمسارات احتياطية مرنة
+const candidateStaticDirs = [
+  process.env.STATIC_DIR && path.resolve(process.env.STATIC_DIR),
+  path.join(__dirname, '..', 'dist'),
+  path.join(__dirname, '..', 'client', 'dist'),
+  path.resolve(process.cwd(), 'dist'),
+].filter(Boolean);
+
+let distDir = candidateStaticDirs.find((dir) => {
+  try {
+    return fs.existsSync(dir) && fs.existsSync(path.join(dir, 'index.html'));
+  } catch {
+    return false;
+  }
+});
+
+if (!distDir) {
+  // إذا لم نعثر على مجلد dist، استخدم أول مرشح كافتراضي (قد يؤدي إلى 404)
+  distDir = candidateStaticDirs[0];
+}
+
+console.log('📦 Static frontend directory:', distDir);
+app.use(express.static(distDir));
 
 
 // --- 1. استيراد كل ملفات التوجيه (Routes) ---
@@ -44,10 +68,10 @@ app.use('/api/calendar', calendarRoutes);
 
 
 // --- 3. المسار الشامل (Catch-all) يجب أن يكون هو الأخير دائماً ---
-// تم تعطيل المسار الشامل مؤقتاً لحل مشكلة API
-// app.get('*', (req, res) => {
-//     res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
-// });
+// إعادة تفعيل مسار SPA لإرجاع index.html لأي طلب غير API
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distDir, 'index.html'));
+});
 
 
 // --- 4. بدء تشغيل الخادم ---

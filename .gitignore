@@ -1,5 +1,6 @@
 node_modules/
-dist/
+client/dist/
 .build/
 .env
 chrome-extension/
+server/dist/

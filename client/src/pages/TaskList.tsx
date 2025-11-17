@@ -104,7 +104,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
       };
 
       const nonCompletedTasks = tasksData.filter(t => t.Status !== 'completed' && t.Status !== 'cancelled');
-      const completedOnlyTasks = tasksData.filter(t => t.Status === 'completed' || t.Status === 'cancelled');
 
       // جلب تفاصيل المهام غير المكتملة فقط
       const subtasksResults = await fetchInBatches(nonCompletedTasks, BATCH_SIZE, async (task) =>
