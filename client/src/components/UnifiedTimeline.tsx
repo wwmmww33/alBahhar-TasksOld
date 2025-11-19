@@ -447,7 +447,7 @@ const UnifiedTimeline = ({
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
-                timeZone: 'UTC'
+                timeZone: 'Asia/Muscat'
               })}
             </span>
           </div>
@@ -485,7 +485,7 @@ const UnifiedTimeline = ({
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
-                timeZone: 'UTC'
+                timeZone: 'Asia/Muscat'
               })}
             </span>
           </div>

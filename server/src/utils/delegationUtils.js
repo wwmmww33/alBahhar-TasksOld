@@ -32,6 +32,37 @@ async function checkDelegationPermission(delegatorUserId, delegateUserId, permis
 }
 
 /**
+ * التحقق من وجود تفويض نشط بغض النظر عن نوع الصلاحيات
+ * يُستخدم لضبط ActedBy عند العمل بالنيابة
+ * @param {string} delegatorUserId - معرف المفوِّض (صاحب المهام)
+ * @param {string} delegateUserId - معرف المفوَّض إليه
+ * @returns {Promise<boolean>} - true إذا كان هناك تفويض نشط حاليًا
+ */
+async function hasActiveDelegation(delegatorUserId, delegateUserId) {
+  try {
+    if (!delegatorUserId || !delegateUserId) return false;
+    if (delegatorUserId === delegateUserId) return true;
+
+    const request = new sql.Request();
+    request.input('delegatorUserID', sql.NVarChar(50), delegatorUserId);
+    request.input('delegateUserID', sql.NVarChar(50), delegateUserId);
+    const result = await request.query(`
+      SELECT COUNT(*) AS Cnt
+      FROM dbo.TaskDelegations
+      WHERE DelegatorUserID = @delegatorUserID
+        AND DelegateUserID = @delegateUserID
+        AND IsActive = 1
+        AND StartDate <= GETDATE()
+        AND (EndDate IS NULL OR EndDate >= GETDATE())
+    `);
+    return (result.recordset?.[0]?.Cnt || 0) > 0;
+  } catch (error) {
+    console.error('Error checking active delegation:', error);
+    return false;
+  }
+}
+
+/**
  * الحصول على جميع المستخدمين الذين فوضوا صلاحياتهم للمستخدم الحالي
  * @param {string} delegateUserId - معرف المستخدم المفوَّض إليه
  * @returns {Promise<Array>} - قائمة بالمستخدمين المفوِّضين
@@ -229,6 +260,7 @@ async function checkTaskAccess(taskId, userId, isAdmin, requiredPermission = 'vi
 
 module.exports = {
   checkDelegationPermission,
+  hasActiveDelegation,
   getDelegatorsForUser,
   getDelegatesForUser,
   getTasksQueryWithDelegation,

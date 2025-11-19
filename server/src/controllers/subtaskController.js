@@ -56,7 +56,19 @@ exports.createSubtask = async (req, res) => {
 
   // إذا لم يتم تحديد شخص للإسناد، يتم إسنادها للمنشئ
   const finalAssignedTo = AssignedTo || CreatedBy;
-  const actorUserId = ActedBy || CreatedBy;
+  // لا نملأ ActedBy إلا عند وجود تفويض نشط
+  let actorUserId = null;
+  if (ActedBy && ActedBy !== CreatedBy) {
+    try {
+      const { hasActiveDelegation } = require('../utils/delegationUtils');
+      const active = await hasActiveDelegation(CreatedBy, ActedBy);
+      if (active) {
+        actorUserId = ActedBy;
+      }
+    } catch (_) {
+      actorUserId = null;
+    }
+  }
   const encryptedTitle = encryptionConfig.encrypt(Title);
 
   try {

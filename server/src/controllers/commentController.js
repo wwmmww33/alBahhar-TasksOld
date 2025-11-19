@@ -1,6 +1,7 @@
 // src/controllers/commentController.js
 const sql = require('mssql');
 const encryptionConfig = require('../config/encryption.config');
+const { hasActiveDelegation } = require('../utils/delegationUtils');
 
 exports.createComment = async (req, res) => {
     const pool = req.app.locals.db;
@@ -19,8 +20,27 @@ exports.createComment = async (req, res) => {
             return res.status(400).json({ message: 'Invalid CreatedAt date format.' });
         }
 
+        // تحديد ActedBy فقط عند وجود تفويض نشط من صاحب المهمة
+        let actorUserId = null;
+        if (ActedBy && ActedBy !== UserID) {
+            try {
+                // جلب صاحب المهمة (المفوِّض)
+                const taskOwnerRes = await pool.request()
+                    .input('TaskID', sql.Int, TaskID)
+                    .query('SELECT TOP(1) CreatedBy FROM Tasks WHERE TaskID = @TaskID');
+                const delegatorId = taskOwnerRes.recordset[0]?.CreatedBy || null;
+                if (delegatorId) {
+                    const active = await hasActiveDelegation(delegatorId, ActedBy);
+                    if (active) {
+                        actorUserId = ActedBy;
+                    }
+                }
+            } catch (_) {
+                actorUserId = null;
+            }
+        }
+
         // إدراج التعليق بدون OUTPUT clause لتجنب تعارض مع trigger
-        const actorUserId = ActedBy || UserID;
         await pool.request()
             .input('TaskID', sql.Int, TaskID)
             .input('UserID', sql.NVarChar, UserID)

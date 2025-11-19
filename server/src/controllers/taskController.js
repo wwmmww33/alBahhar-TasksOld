@@ -1,6 +1,6 @@
 // src/controllers/taskController.js
 const sql = require('mssql');
-const { getTasksQueryWithDelegation, checkTaskAccess } = require('../utils/delegationUtils');
+const { getTasksQueryWithDelegation, checkTaskAccess, checkDelegationPermission, hasActiveDelegation } = require('../utils/delegationUtils');
 const encryptionConfig = require('../config/encryption.config');
 
 exports.getAllTasks = async (req, res) => {
@@ -149,10 +149,22 @@ exports.createTask = async (req, res) => {
   const transaction = new sql.Transaction(pool);
   try {
     await transaction.begin();
-    const actorUserId = ActedBy || CreatedBy;
+    // لا نملأ ActedBy إلا إذا كان المستخدم يعمل كمفوَّض (تفويض نشط)
+    let actorUserId = null;
+    if (ActedBy && ActedBy !== CreatedBy) {
+      try {
+        const active = await hasActiveDelegation(CreatedBy, ActedBy);
+        if (active) {
+          actorUserId = ActedBy;
+        }
+      } catch (_) {
+        actorUserId = null;
+      }
+    }
     const taskResult = await new sql.Request(transaction)
       .input('Title', sql.NVarChar, encryptedTitle).input('Description', sql.NVarChar, encryptedDescription)
-      .input('CreatedBy', sql.NVarChar, CreatedBy).input('ActedBy', sql.NVarChar, actorUserId).input('DepartmentID', sql.Int, DepartmentID)
+      .input('CreatedBy', sql.NVarChar, CreatedBy).input('ActedBy', sql.NVarChar, actorUserId)
+      .input('DepartmentID', sql.Int, DepartmentID)
       .input('Priority', sql.NVarChar, Priority || 'normal').input('DueDate', sql.DateTime, new Date(DueDate))
       .input('CategoryID', sql.Int, CategoryID || null)
       .query(`INSERT INTO Tasks (Title, Description, CreatedBy, ActedBy, DepartmentID, Priority, DueDate, Status, CategoryID) OUTPUT INSERTED.TaskID VALUES (@Title, @Description, @CreatedBy, @ActedBy, @DepartmentID, @Priority, @DueDate, 'open', @CategoryID);`);
@@ -162,7 +174,9 @@ exports.createTask = async (req, res) => {
         const encSubtaskTitle = encryptionConfig.encrypt(subtaskTitle);
         await new sql.Request(transaction)
           .input('TaskID', sql.Int, newTaskId).input('Title', sql.NVarChar, encSubtaskTitle)
-          .input('CreatedBy', sql.NVarChar, CreatedBy).input('ActedBy', sql.NVarChar, actorUserId).input('AssignedTo', sql.NVarChar, CreatedBy)
+          .input('CreatedBy', sql.NVarChar, CreatedBy)
+          .input('ActedBy', sql.NVarChar, actorUserId)
+          .input('AssignedTo', sql.NVarChar, CreatedBy)
           .query('INSERT INTO Subtasks (TaskID, Title, CreatedBy, ActedBy, AssignedTo, IsCompleted, CreatedAt) VALUES (@TaskID, @Title, @CreatedBy, @ActedBy, @AssignedTo, 0, GETDATE())');
       }
     }

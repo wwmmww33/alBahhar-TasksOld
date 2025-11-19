@@ -213,7 +213,13 @@ const DelegationManagement = () => {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('ar-SA');
+    const d = new Date(dateString);
+    // فرض التقويم الميلادي حتى مع اللغة العربية السعودية
+    return d.toLocaleDateString('ar-SA-u-ca-gregory', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
   };
 
   const isExpired = (endDate: string | null) => {
