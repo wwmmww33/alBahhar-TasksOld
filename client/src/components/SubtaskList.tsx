@@ -2,6 +2,7 @@
 import { Check, Square, Trash2, UserPlus, Calendar, Clock } from 'lucide-react';
 import React, { useState } from 'react';
 import type { Subtask, User, CurrentUser } from '../types';
+import { getActiveUserId } from '../utils/activeAccount';
 
 type SubtaskListProps = { 
   subtasks: Subtask[]; 
@@ -28,9 +29,14 @@ const SubtaskList = ({ subtasks, usersInDepartment, currentUser, task, onSubtask
   const [editDueDate, setEditDueDate] = useState<string>('');
   const [editingField, setEditingField] = useState<'title' | 'dueDate' | null>(null);
 
-  const canManageAssignments = currentUser.IsAdmin || currentUser.UserID === task.CreatedBy;
-  const canAddSubtasks = canManageAssignments || subtasks.some(st => st.AssignedTo === currentUser.UserID);
-  const canEditSubtask = (st: Subtask) => canManageAssignments || currentUser.UserID === st.CreatedBy;
+  const actingUserId = getActiveUserId(currentUser.UserID);
+  const getUserNameById = (id?: string) => {
+    if (!id) return '';
+    return usersInDepartment.find(u => u.UserID === id)?.FullName || id;
+  };
+  const canManageAssignments = currentUser.IsAdmin || actingUserId === task.CreatedBy;
+  const canAddSubtasks = canManageAssignments || subtasks.some(st => st.AssignedTo === actingUserId);
+  const canEditSubtask = (st: Subtask) => canManageAssignments || actingUserId === st.CreatedBy;
 
   const handleAddSubtask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,8 +44,8 @@ const SubtaskList = ({ subtasks, usersInDepartment, currentUser, task, onSubtask
     const resp = await fetch('/api/subtasks', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        TaskID: task.TaskID, Title: newSubtaskTitle, CreatedBy: currentUser.UserID,
-        DueDate: newSubtaskDueDate || null, AssignedTo: assignTo || currentUser.UserID,
+        TaskID: task.TaskID, Title: newSubtaskTitle, CreatedBy: actingUserId, ActedBy: currentUser.UserID,
+        DueDate: newSubtaskDueDate || null, AssignedTo: assignTo || actingUserId,
         ShowInCalendar: showInCalendar
       }),
     });
@@ -225,11 +231,14 @@ const SubtaskList = ({ subtasks, usersInDepartment, currentUser, task, onSubtask
                             {usersInDepartment.map(user => (<option key={user.UserID} value={user.UserID}>{user.FullName}</option>))}
                         </select>
                     </div>
-                    {subtask.CreatedByName && (
-                        <div className="flex items-center gap-1">
-                            <span className="text-xs text-content-secondary">منشئ: {subtask.CreatedByName}</span>
-                        </div>
-                    )}
+              {(subtask.CreatedByName || subtask.CreatedBy) && (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-content-secondary">
+                    المنشيء: {subtask.CreatedByName || subtask.CreatedBy}
+                    {subtask.ActedBy ? ` بواسطة (${subtask.ActedByName || getUserNameById(subtask.ActedBy)})` : ''}
+                  </span>
+                </div>
+              )}
                     {subtask.CreatedAt && (
                         <div className="flex items-center gap-1">
                             <Clock size={14} />

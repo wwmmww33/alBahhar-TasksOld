@@ -106,10 +106,11 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
     if (isAdmin) {
       // المدير يرى جميع المهام
       return `
-        SELECT t.*, creator.FullName as CreatedByName, c.Name as CategoryName,
+        SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName,
                CASE WHEN t.CreatedBy = '${userId}' THEN 'owner' ELSE 'admin' END as AccessType
         FROM Tasks t
         LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+        LEFT JOIN Users acted ON t.ActedBy = acted.UserID
         LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
         ORDER BY t.CreatedAt DESC
       `;
@@ -125,7 +126,7 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
     }
     
     return `
-      SELECT DISTINCT t.*, creator.FullName as CreatedByName, c.Name as CategoryName,
+      SELECT DISTINCT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName,
              CASE 
                WHEN t.CreatedBy = '${userId}' THEN 'owner'
                WHEN t.CreatedBy IN (${delegatorIds || "''"}) THEN 'delegated'
@@ -133,6 +134,7 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
              END as AccessType
       FROM Tasks t
       LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+      LEFT JOIN Users acted ON t.ActedBy = acted.UserID
       LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
       WHERE t.CreatedBy = '${userId}' 
          OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
@@ -143,10 +145,11 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
     console.error('Error building tasks query with delegation:', error);
     // في حالة الخطأ، إرجاع الاستعلام الأساسي
     return `
-      SELECT DISTINCT t.*, creator.FullName as CreatedByName, c.Name as CategoryName,
+      SELECT DISTINCT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName,
              'owner' as AccessType
       FROM Tasks t
       LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+      LEFT JOIN Users acted ON t.ActedBy = acted.UserID
       LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
       WHERE t.CreatedBy = '${userId}' 
          OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')

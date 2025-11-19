@@ -4,6 +4,7 @@ import TaskCard from '../components/TaskCard';
 import SearchBar from '../components/SearchBar';
 import { useNotification } from '../contexts/NotificationContext';
 import type { CurrentUser, Subtask, Comment } from '../types';
+import { getActiveUserId } from '../utils/activeAccount';
 import { Loader2, ClipboardCopy, Filter, User, Users, ChevronDown } from 'lucide-react';
 
 type Task = {
@@ -55,7 +56,8 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     setError(null);
     try {
       const isAdmin = currentUser.IsAdmin;
-      const tasksRes = await fetch(`/api/tasks/with-notifications?userId=${currentUser.UserID}&isAdmin=${isAdmin}`);
+      const actingUserId = getActiveUserId(currentUser.UserID);
+      const tasksRes = await fetch(`/api/tasks/with-notifications?userId=${actingUserId}&isAdmin=${isAdmin}`);
       let tasksData: Task[] = [];
 
       // حرس قوي لتحليل JSON وتوفير سقوط احتياطي مع فحص نوع المحتوى
@@ -69,7 +71,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
       if (!tasksRes.ok) {
         // في حالة فشل المسار مع الإشعارات، جرب المسار الأساسي كحل مؤقت
         console.warn('Tasks API responded non-OK:', tasksRes.status);
-        const fallbackRes = await fetch(`/api/tasks?userId=${currentUser.UserID}&isAdmin=${isAdmin}`);
+        const fallbackRes = await fetch(`/api/tasks?userId=${actingUserId}&isAdmin=${isAdmin}`);
         const fallbackData = await parseJsonSafely(fallbackRes);
         tasksData = Array.isArray(fallbackData) ? fallbackData as Task[] : [];
       } else {
@@ -79,7 +81,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
           tasksData = primaryData as Task[];
         } else {
           console.warn('with-notifications returned non-JSON or invalid; falling back to /api/tasks');
-          const fallbackRes = await fetch(`/api/tasks?userId=${currentUser.UserID}&isAdmin=${isAdmin}`);
+          const fallbackRes = await fetch(`/api/tasks?userId=${actingUserId}&isAdmin=${isAdmin}`);
           const fallbackData = await parseJsonSafely(fallbackRes);
           tasksData = Array.isArray(fallbackData) ? fallbackData as Task[] : [];
         }
@@ -107,19 +109,19 @@ const TaskList = ({ currentUser }: TaskListProps) => {
 
       // جلب تفاصيل المهام غير المكتملة فقط
       const subtasksResults = await fetchInBatches(nonCompletedTasks, BATCH_SIZE, async (task) =>
-        fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)
+        fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
           .then(res => res.status === 403 ? [] : res.json())
           .catch(() => [])
       );
 
       const commentsResults = await fetchInBatches(nonCompletedTasks, BATCH_SIZE, async (task) =>
-        fetch(`/api/tasks/${task.TaskID}/comments?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)
+        fetch(`/api/tasks/${task.TaskID}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
           .then(res => res.status === 403 ? [] : res.json())
           .catch(() => [])
       );
       
       const prioritiesResults = await fetchInBatches(nonCompletedTasks, BATCH_SIZE, async (task) =>
-        fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${currentUser.UserID}`)
+        fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${actingUserId}`)
           .then(res => res.json())
           .catch(() => ({ priority: task.Priority }))
       );
@@ -187,20 +189,21 @@ const TaskList = ({ currentUser }: TaskListProps) => {
           return results;
         };
 
+        const actingUserId = getActiveUserId(currentUser.UserID);
         const completedSubtasks = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)
+          fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
             .then(res => res.status === 403 ? [] : res.json())
             .catch(() => [])
         );
 
         const completedComments = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/comments?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)
+          fetch(`/api/tasks/${task.TaskID}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
             .then(res => res.status === 403 ? [] : res.json())
             .catch(() => [])
         );
 
         const completedPriorities = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${currentUser.UserID}`)
+          fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${actingUserId}`)
             .then(res => res.json())
             .catch(() => ({ priority: task.Priority }))
         );
@@ -237,7 +240,8 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   // دالة لتحديث أولوية المهمة
   const updateTaskPriority = async (taskId: number, newPriority: 'normal' | 'urgent' | 'starred') => {
     try {
-      const response = await fetch(`/api/tasks/${taskId}/user-priority?userId=${currentUser.UserID}`, {
+      const actingUserId = getActiveUserId(currentUser.UserID);
+      const response = await fetch(`/api/tasks/${taskId}/user-priority?userId=${actingUserId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -384,7 +388,8 @@ const TaskList = ({ currentUser }: TaskListProps) => {
 
   const filteredTasks = tasks.filter(task => {
     // فلتر حسب المنشئ
-    const matchesFilter = filterMode === 'all' || task.CreatedBy === currentUser.UserID;
+    const actingUserId = getActiveUserId(currentUser.UserID);
+    const matchesFilter = filterMode === 'all' || task.CreatedBy === actingUserId;
     
     // فلتر حسب البحث
     const matchesSearch = !searchTerm.trim() || 
@@ -423,14 +428,15 @@ const TaskList = ({ currentUser }: TaskListProps) => {
       return false;
     }
 
-    // إذا لم تكن هناك مهام فرعية إطلاقاً، اعرض المهمة إذا كنتَ أنت المنشئ
+    // إذا لم تكن هناك مهام فرعية إطلاقاً، اعرض المهمة إذا كان الحساب النشط هو المنشئ
+    const actingUserId = getActiveUserId(currentUser.UserID);
     if (!task.subtasks || task.subtasks.length === 0) {
-      return task.CreatedBy === currentUser.UserID;
+      return task.CreatedBy === actingUserId;
     }
 
     // إظهار فقط المهام التي لدي فيها إجراء (مهام فرعية مسندة لي)
     const mySubtasks = (task.subtasks || []).filter(
-      subtask => subtask.AssignedTo === currentUser.UserID
+      subtask => subtask.AssignedTo === actingUserId
     );
     if (mySubtasks.length === 0) {
       return false; // لا توجد مهام فرعية مسندة لي، ليست ضمن المهام النشطة الخاصة بي
@@ -465,11 +471,12 @@ const TaskList = ({ currentUser }: TaskListProps) => {
       return false; // لا توجد مهام فرعية
     }
 
+    const actingUserId = getActiveUserId(currentUser.UserID);
     const mySubtasks = task.subtasks.filter(
-      subtask => subtask.AssignedTo === currentUser.UserID
+      subtask => subtask.AssignedTo === actingUserId
     );
     const otherAssignedSubtasks = task.subtasks.filter(
-      subtask => subtask.AssignedTo && subtask.AssignedTo !== currentUser.UserID
+      subtask => subtask.AssignedTo && subtask.AssignedTo !== actingUserId
     );
 
     const hasActionedByCompletion =
@@ -477,7 +484,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     const hasActionedByDelegation =
       mySubtasks.length === 0 &&
       otherAssignedSubtasks.length > 0 &&
-      task.CreatedBy === currentUser.UserID;
+      task.CreatedBy === actingUserId;
 
     return hasActionedByCompletion || hasActionedByDelegation;
   });
@@ -489,8 +496,9 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     }
     
     // فلترة المهام الفرعية الغير مكتملة
+    const actingUserId = getActiveUserId(currentUser.UserID);
     const myIncompleteSubtasks = task.subtasks.filter(
-      st => !st.IsCompleted && st.AssignedTo === currentUser.UserID
+      st => !st.IsCompleted && st.AssignedTo === actingUserId
     ) || [];
     
     if (myIncompleteSubtasks.length === 0) {

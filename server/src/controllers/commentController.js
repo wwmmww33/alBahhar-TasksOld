@@ -4,7 +4,7 @@ const encryptionConfig = require('../config/encryption.config');
 
 exports.createComment = async (req, res) => {
     const pool = req.app.locals.db;
-    const { TaskID, UserID, Content, CreatedAt } = req.body;
+    const { TaskID, UserID, ActedBy, Content, CreatedAt } = req.body;
 
     if (!TaskID || !UserID || !Content) {
         return res.status(400).json({ message: 'TaskID, UserID, and Content are required.' });
@@ -20,14 +20,16 @@ exports.createComment = async (req, res) => {
         }
 
         // إدراج التعليق بدون OUTPUT clause لتجنب تعارض مع trigger
+        const actorUserId = ActedBy || UserID;
         await pool.request()
             .input('TaskID', sql.Int, TaskID)
             .input('UserID', sql.NVarChar, UserID)
+            .input('ActedBy', sql.NVarChar, actorUserId)
             .input('Content', sql.NVarChar, encryptionConfig.encrypt(Content))
             .input('CreatedAt', sql.DateTime, commentCreatedAt)
             .query(`
-                INSERT INTO Comments (TaskID, UserID, Content, CreatedAt)
-                VALUES (@TaskID, @UserID, @Content, @CreatedAt);
+                INSERT INTO Comments (TaskID, UserID, ActedBy, Content, CreatedAt)
+                VALUES (@TaskID, @UserID, @ActedBy, @Content, @CreatedAt);
             `);
         
         // جلب التعليق المضاف حديثاً

@@ -1,9 +1,10 @@
 // src/components/Navbar.tsx
-import { Sun, Moon, LogOut, ListTodo, PlusCircle, FileText, Shield, User, FolderOpen } from 'lucide-react';
+import { Sun, Moon, LogOut, ListTodo, PlusCircle, FileText, Shield, User, FolderOpen, Share2 } from 'lucide-react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeProvider';
 import UnifiedNotifications from './UnifiedNotifications';
 import type { CurrentUser } from '../types';
+import { getActiveAccount, getActiveUserId, clearActiveAccount } from '../utils/activeAccount';
 
 type NavbarProps = {
   currentUser: CurrentUser;
@@ -46,6 +47,7 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
           <NavLink to="/tasks" className={navLinkStyle}><ListTodo size={18} /><span>المهام</span></NavLink>
           <NavLink to="/procedures" className={navLinkStyle}><FileText size={18} /><span>المهام الافتراضية</span></NavLink>
           <NavLink to="/categories" className={navLinkStyle}><FolderOpen size={18} /><span>التصنيفات</span></NavLink>
+          <NavLink to="/delegations" className={navLinkStyle}><Share2 size={18} /><span>التفويضات</span></NavLink>
           <NavLink to="/profile" className={navLinkStyle}><User size={18} /><span>الملف الشخصي</span></NavLink>
           {currentUser.IsAdmin && <NavLink to="/system-management" className={navLinkStyle}><Shield size={18} /><span>إدارة النظام</span></NavLink>}
         </nav>
@@ -66,7 +68,7 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
         </select>
         
         <UnifiedNotifications 
-          userId={currentUser.UserID} 
+          userId={getActiveUserId(currentUser.UserID)} 
           onNotificationClick={handleNotificationClick}
         />
         
@@ -75,7 +77,26 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
         </button>
         
         <div className="h-8 border-l border-content/10"></div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-6">
+            {/* مؤشر الحساب النشط */}
+            {(() => {
+                const acc = getActiveAccount();
+                if (acc && acc.mode === 'delegation') {
+                  return (
+                    <div className="px-3 py-1 rounded-md bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs flex items-center gap-2">
+                      <span>تعمل الآن نيابةً عن:</span>
+                      <span className="font-semibold">{acc.userName || acc.userId}</span>
+                      <button
+                        onClick={() => { clearActiveAccount(); window.location.reload(); }}
+                        className="ml-2 underline hover:no-underline"
+                      >رجوع لحسابك</button>
+                    </div>
+                  );
+                }
+                return null;
+            })()}
+            
+            <div className="flex items-center gap-3">
             <div className="text-right">
                 <p className="font-semibold text-sm text-content">{currentUser.FullName}</p>
                 <p className="text-xs text-content-secondary">{currentUser.DepartmentName || 'الإدارة'}</p>
@@ -83,6 +104,7 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
             <button onClick={onLogout} title="تسجيل الخروج" className="p-2 rounded-full text-content-secondary hover:bg-red-500/10 hover:text-red-500 transition-colors">
                 <LogOut size={20} />
             </button>
+            </div>
         </div>
       </div>
     </header>

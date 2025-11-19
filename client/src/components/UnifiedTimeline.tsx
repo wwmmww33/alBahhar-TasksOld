@@ -3,6 +3,7 @@ import { Check, Square, Trash2, UserPlus, Calendar, Clock, MessageCircle, CheckS
 import React, { useState, useMemo } from 'react';
 import type { Subtask, User, CurrentUser } from '../types';
 import { useNotification } from '../contexts/NotificationContext';
+import { getActiveUserId } from '../utils/activeAccount';
 
 type Comment = {
   CommentID: number;
@@ -10,6 +11,8 @@ type Comment = {
   UserID: string;
   UserName?: string;
   CreatedAt: string;
+  ActedBy?: string;
+  ActedByName?: string;
 };
 
 type TimelineItem = {
@@ -43,6 +46,10 @@ const UnifiedTimeline = ({
   isSubmittingComment
 }: UnifiedTimelineProps) => {
   const { refreshTasks, refreshNotifications } = useNotification();
+  const getUserNameById = (id?: string) => {
+    if (!id) return '';
+    return users.find(u => u.UserID === id)?.FullName || id;
+  };
   const getTodayString = () => {
     const d = new Date();
     const y = d.getFullYear();
@@ -76,8 +83,9 @@ const UnifiedTimeline = ({
   const [editingDueSubtaskId, setEditingDueSubtaskId] = useState<number | null>(null);
   const [editingDueValue, setEditingDueValue] = useState<string>('');
 
-  const canManageAssignments = currentUser.IsAdmin || (task && currentUser.UserID === task.CreatedBy);
-  const canAddSubtasks = canManageAssignments || subtasks.some(st => st.AssignedTo === currentUser.UserID);
+  const actingUserId = getActiveUserId(currentUser.UserID);
+  const canManageAssignments = currentUser.IsAdmin || (task && actingUserId === task.CreatedBy);
+  const canAddSubtasks = canManageAssignments || subtasks.some(st => st.AssignedTo === actingUserId);
 
   // دمج المهام الفرعية والتعليقات وترتيبها حسب التاريخ
   const timelineItems: TimelineItem[] = useMemo(() => {
@@ -116,9 +124,10 @@ const UnifiedTimeline = ({
       body: JSON.stringify({
         TaskID: taskId,
         Title: newSubtaskTitle,
-        CreatedBy: currentUser.UserID,
+        CreatedBy: actingUserId,
+        ActedBy: currentUser.UserID,
         DueDate: newSubtaskDueDate || null,
-        AssignedTo: assignTo || currentUser.UserID,
+        AssignedTo: assignTo || actingUserId,
         ShowInCalendar: showInCalendar
       }),
     });
@@ -136,7 +145,7 @@ const UnifiedTimeline = ({
   };
 
   const handleToggleStatus = async (subtask: Subtask) => {
-    if (subtask.AssignedTo === currentUser.UserID || currentUser.IsAdmin) {
+    if (subtask.AssignedTo === actingUserId || currentUser.IsAdmin) {
       await fetch(`/api/subtasks/${subtask.SubtaskID}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -212,7 +221,7 @@ const UnifiedTimeline = ({
   };
 
   const handleDeleteSubtask = async (subtask: Subtask) => {
-    if (subtask.CreatedBy === currentUser.UserID || currentUser.IsAdmin) {
+    if (subtask.CreatedBy === actingUserId || currentUser.IsAdmin) {
       if (window.confirm('هل أنت متأكد من حذف هذه المهمة الفرعية؟')) {
         await fetch(`/api/subtasks/${subtask.SubtaskID}`, { method: 'DELETE' });
         onSubtaskUpdate();
@@ -258,10 +267,10 @@ const UnifiedTimeline = ({
   };
 
   const renderSubtaskItem = (subtask: Subtask) => {
-    const canDelete = subtask.CreatedBy === currentUser.UserID || currentUser.IsAdmin;
-    const canToggle = subtask.AssignedTo === currentUser.UserID || currentUser.IsAdmin;
-    const canEditTitle = subtask.CreatedBy === currentUser.UserID || currentUser.IsAdmin;
-    const canEditDue = subtask.CreatedBy === currentUser.UserID || currentUser.IsAdmin;
+    const canDelete = subtask.CreatedBy === actingUserId || currentUser.IsAdmin;
+    const canToggle = subtask.AssignedTo === actingUserId || currentUser.IsAdmin;
+    const canEditTitle = subtask.CreatedBy === actingUserId || currentUser.IsAdmin;
+    const canEditDue = subtask.CreatedBy === actingUserId || currentUser.IsAdmin;
 
     return (
       <div className="flex items-start gap-3">
@@ -354,9 +363,12 @@ const UnifiedTimeline = ({
                 </select>
               </div>
               
-              {subtask.CreatedByName && (
+              {(subtask.CreatedByName || subtask.CreatedBy) && (
                 <div className="flex items-center gap-1">
-                  <span>منشئ: {subtask.CreatedByName}</span>
+                  <span>
+                    المنشيء: {subtask.CreatedByName || subtask.CreatedBy}
+                    {subtask.ActedBy ? ` بواسطة (${subtask.ActedByName || getUserNameById(subtask.ActedBy)})` : ''}
+                  </span>
                 </div>
               )}
               
@@ -455,7 +467,10 @@ const UnifiedTimeline = ({
             <p className="text-content mb-2">{comment.Content}</p>
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
-                <p className="text-xs text-content-secondary">بواسطة: {comment.UserName || comment.UserID}</p>
+                <p className="text-xs text-content-secondary">
+                  المنشيء: {comment.UserName || comment.UserID}
+                  {comment.ActedBy ? ` بواسطة (${comment.ActedByName || getUserNameById(comment.ActedBy)})` : ''}
+                </p>
               </div>
               <p className="text-xs text-content-secondary font-mono">#{comment.CommentID}</p>
             </div>

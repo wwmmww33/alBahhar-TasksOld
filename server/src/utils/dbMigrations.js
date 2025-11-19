@@ -61,4 +61,211 @@ module.exports = {
       throw err;
     }
   }
+  ,
+  // إضافة أعمدة ActedBy إلى الجداول Tasks/Subtasks/Comments إذا لم تكن موجودة
+  ensureActedByColumns: async function ensureActedByColumns(pool) {
+    try {
+      const queries = `
+        IF COL_LENGTH('dbo.Tasks', 'ActedBy') IS NULL BEGIN
+          ALTER TABLE dbo.Tasks ADD ActedBy NVARCHAR(50) NULL;
+        END;
+
+        IF COL_LENGTH('dbo.Subtasks', 'ActedBy') IS NULL BEGIN
+          ALTER TABLE dbo.Subtasks ADD ActedBy NVARCHAR(50) NULL;
+        END;
+
+        IF COL_LENGTH('dbo.Comments', 'ActedBy') IS NULL BEGIN
+          ALTER TABLE dbo.Comments ADD ActedBy NVARCHAR(50) NULL;
+        END;
+      `;
+      await pool.request().query(queries);
+      console.log('✅ Ensured ActedBy columns exist in Tasks/Subtasks/Comments.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring ActedBy columns:', err);
+      throw err;
+    }
+  },
+
+  // إضافة عمود DelegationPasswordHash إلى جدول Users إذا لم يكن موجودًا
+  ensureDelegationPasswordHashInUsers: async function ensureDelegationPasswordHashInUsers(pool) {
+    try {
+      const query = `
+        IF COL_LENGTH('dbo.Users', 'DelegationPasswordHash') IS NULL BEGIN
+          ALTER TABLE dbo.Users ADD DelegationPasswordHash NVARCHAR(256) NULL;
+        END;
+      `;
+      await pool.request().query(query);
+      console.log('✅ Ensured DelegationPasswordHash column exists in Users.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring DelegationPasswordHash column in Users:', err);
+      throw err;
+    }
+  },
+
+  // إضافة عمود DelegationSecretHash إلى جدول TaskDelegations إذا لم يكن موجودًا
+  ensureDelegationSecretHashInTaskDelegations: async function ensureDelegationSecretHashInTaskDelegations(pool) {
+    try {
+      const query = `
+        IF COL_LENGTH('dbo.TaskDelegations', 'DelegationSecretHash') IS NULL BEGIN
+          ALTER TABLE dbo.TaskDelegations ADD DelegationSecretHash NVARCHAR(256) NULL;
+        END;
+      `;
+      await pool.request().query(query);
+      console.log('✅ Ensured DelegationSecretHash column exists in TaskDelegations.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring DelegationSecretHash column in TaskDelegations:', err);
+      throw err;
+    }
+  },
+
+  // إنشاء جدول TaskDelegations إذا لم يكن موجودًا (آمن للتشغيل المتكرر)
+  ensureTaskDelegationsTable: async function ensureTaskDelegationsTable(pool) {
+    try {
+      const tableCheck = await pool.request().query(`
+        SELECT COUNT(*) as tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'TaskDelegations'
+      `);
+      const exists = tableCheck.recordset[0].tableExists > 0;
+      if (exists) {
+        console.log('ℹ️ TaskDelegations table already exists.');
+        return { changed: false };
+      }
+
+      const createQuery = `
+        CREATE TABLE dbo.TaskDelegations (
+          DelegationID INT IDENTITY(1,1) PRIMARY KEY,
+          DelegatorUserID NVARCHAR(50) NOT NULL,
+          DelegateUserID NVARCHAR(50) NOT NULL,
+          DelegationType NVARCHAR(20) NOT NULL CONSTRAINT CK_TaskDelegations_Type CHECK (DelegationType IN ('full','limited')),
+          StartDate DATETIME NOT NULL CONSTRAINT DF_TaskDelegations_StartDate DEFAULT(GETDATE()),
+          EndDate DATETIME NULL,
+          IsActive BIT NOT NULL CONSTRAINT DF_TaskDelegations_IsActive DEFAULT(1),
+          Reason NVARCHAR(500) NULL,
+          CreatedAt DATETIME NOT NULL CONSTRAINT DF_TaskDelegations_CreatedAt DEFAULT(GETDATE()),
+          UpdatedAt DATETIME NULL,
+          CreatedBy NVARCHAR(50) NOT NULL,
+          CONSTRAINT FK_TaskDelegations_Delegator FOREIGN KEY (DelegatorUserID) REFERENCES dbo.Users(UserID),
+          CONSTRAINT FK_TaskDelegations_Delegate FOREIGN KEY (DelegateUserID) REFERENCES dbo.Users(UserID)
+        );
+        CREATE INDEX IX_TaskDelegations_Delegator ON dbo.TaskDelegations(DelegatorUserID);
+        CREATE INDEX IX_TaskDelegations_Delegate ON dbo.TaskDelegations(DelegateUserID);
+        CREATE INDEX IX_TaskDelegations_ActivePeriod ON dbo.TaskDelegations(IsActive, StartDate, EndDate);
+      `;
+      await pool.request().query(createQuery);
+      console.log('✅ Created TaskDelegations table.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring TaskDelegations table:', err);
+      throw err;
+    }
+  },
+  
+  // إنشاء جدول TaskDelegationPermissions إذا لم يكن موجودًا (آمن للتشغيل المتكرر)
+  ensureTaskDelegationPermissionsTable: async function ensureTaskDelegationPermissionsTable(pool) {
+    try {
+      const tableCheck = await pool.request().query(`
+        SELECT COUNT(*) as tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'TaskDelegationPermissions'
+      `);
+      const exists = tableCheck.recordset[0].tableExists > 0;
+      if (exists) {
+        console.log('ℹ️ TaskDelegationPermissions table already exists.');
+        return { changed: false };
+      }
+
+      const createQuery = `
+        CREATE TABLE dbo.TaskDelegationPermissions (
+          PermissionID INT IDENTITY(1,1) PRIMARY KEY,
+          DelegationID INT NOT NULL,
+          PermissionType NVARCHAR(50) NOT NULL CONSTRAINT CK_TaskDelegationPermissions_Type CHECK (PermissionType IN ('view','edit','assign','close','delete','create')),
+          IsGranted BIT NOT NULL CONSTRAINT DF_TaskDelegationPermissions_IsGranted DEFAULT(1),
+          CONSTRAINT FK_TaskDelegationPermissions_Delegation FOREIGN KEY (DelegationID) REFERENCES dbo.TaskDelegations(DelegationID) ON DELETE CASCADE
+        );
+        CREATE INDEX IX_TaskDelegationPermissions_Delegation ON dbo.TaskDelegationPermissions(DelegationID, PermissionType);
+      `;
+      await pool.request().query(createQuery);
+      console.log('✅ Created TaskDelegationPermissions table.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring TaskDelegationPermissions table:', err);
+      throw err;
+    }
+  },
+
+  // إنشاء/تحديث دالة fn_CheckTaskDelegationPermission (آمن للتشغيل في كل مرة)
+  ensureCheckTaskDelegationPermissionFunction: async function ensureCheckTaskDelegationPermissionFunction(pool) {
+    try {
+      await pool.request().query(`
+        IF OBJECT_ID('dbo.fn_CheckTaskDelegationPermission', 'FN') IS NOT NULL
+          DROP FUNCTION dbo.fn_CheckTaskDelegationPermission;
+      `);
+
+      const createFn = `
+        CREATE FUNCTION dbo.fn_CheckTaskDelegationPermission(
+          @DelegatorUserID NVARCHAR(50),
+          @DelegateUserID NVARCHAR(50),
+          @PermissionType NVARCHAR(50)
+        )
+        RETURNS BIT
+        AS
+        BEGIN
+          DECLARE @HasPermission BIT = 0;
+
+          IF EXISTS (
+            SELECT 1 FROM dbo.TaskDelegations 
+            WHERE DelegatorUserID = @DelegatorUserID 
+              AND DelegateUserID = @DelegateUserID 
+              AND IsActive = 1
+              AND StartDate <= GETDATE()
+              AND (EndDate IS NULL OR EndDate >= GETDATE())
+          )
+          BEGIN
+            DECLARE @DelegationType NVARCHAR(20);
+            SELECT TOP 1 @DelegationType = DelegationType 
+            FROM dbo.TaskDelegations 
+            WHERE DelegatorUserID = @DelegatorUserID 
+              AND DelegateUserID = @DelegateUserID 
+              AND IsActive = 1
+              AND StartDate <= GETDATE()
+              AND (EndDate IS NULL OR EndDate >= GETDATE());
+
+            IF @DelegationType = 'full'
+            BEGIN
+              SET @HasPermission = 1;
+            END
+            ELSE IF @DelegationType = 'limited'
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM dbo.TaskDelegations td
+                INNER JOIN dbo.TaskDelegationPermissions tdp ON td.DelegationID = tdp.DelegationID
+                WHERE td.DelegatorUserID = @DelegatorUserID 
+                  AND td.DelegateUserID = @DelegateUserID 
+                  AND td.IsActive = 1
+                  AND td.StartDate <= GETDATE()
+                  AND (td.EndDate IS NULL OR td.EndDate >= GETDATE())
+                  AND tdp.PermissionType = @PermissionType
+                  AND tdp.IsGranted = 1
+              )
+              BEGIN
+                SET @HasPermission = 1;
+              END
+            END
+          END
+
+          RETURN @HasPermission;
+        END
+      `;
+      await pool.request().query(createFn);
+      console.log('✅ (Re)created dbo.fn_CheckTaskDelegationPermission function.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring fn_CheckTaskDelegationPermission function:', err);
+      throw err;
+    }
+  }
 };

@@ -9,6 +9,8 @@ export type Subtask = {
   AssignedToName?: string;
   CreatedBy: string;
   CreatedByName?: string;
+  ActedBy?: string;
+  ActedByName?: string;
   DueDate?: string;
   CreatedAt: string;
   UpdatedAt: string;
@@ -23,6 +25,7 @@ export type Task = {
   Priority: 'low' | 'medium' | 'high';
   AssignedTo: string;
   CreatedBy: string;
+  ActedBy?: string;
   DepartmentID: number;
   CategoryID?: number | null;
   CreatedAt: string;
@@ -31,6 +34,7 @@ export type Task = {
   CompletedAt: string | null;
   AssignedToName?: string;
   CreatedByName?: string;
+  ActedByName?: string;
   DepartmentName?: string;
   CategoryName?: string;
   Subtasks?: Subtask[];
@@ -67,9 +71,11 @@ export type Comment = {
   CommentID: number;
   TaskID: number;
   UserID: string;
+  ActedBy?: string;
   Content: string;
   CreatedAt: string;
   UserName?: string;
+  ActedByName?: string;
 };
 
 export type CurrentUser = {

@@ -48,7 +48,7 @@ exports.getAllSubtasks = async (req, res) => {
 exports.createSubtask = async (req, res) => {
   const pool = req.app.locals.db;
   // --- تأكد من أننا نستقبل كل هذه الحقول ---
-  const { TaskID, Title, CreatedBy, DueDate, AssignedTo, ShowInCalendar } = req.body;
+  const { TaskID, Title, CreatedBy, ActedBy, DueDate, AssignedTo, ShowInCalendar } = req.body;
   
   if (!TaskID || !Title || !CreatedBy) {
     return res.status(400).json({ message: 'TaskID, Title, and CreatedBy are required.' });
@@ -56,6 +56,7 @@ exports.createSubtask = async (req, res) => {
 
   // إذا لم يتم تحديد شخص للإسناد، يتم إسنادها للمنشئ
   const finalAssignedTo = AssignedTo || CreatedBy;
+  const actorUserId = ActedBy || CreatedBy;
   const encryptedTitle = encryptionConfig.encrypt(Title);
 
   try {
@@ -69,13 +70,14 @@ exports.createSubtask = async (req, res) => {
       .input('TaskID', sql.Int, TaskID)
       .input('Title', sql.NVarChar, encryptedTitle)
       .input('CreatedBy', sql.NVarChar, CreatedBy)
+      .input('ActedBy', sql.NVarChar, actorUserId)
       .input('AssignedTo', sql.NVarChar, finalAssignedTo)
       .input('DueDate', sql.Date, dueDateNormalized)
       .input('ShowInCalendar', sql.Bit, ShowInCalendar === true ? 1 : 0)
       .query(`
-        INSERT INTO Subtasks (TaskID, Title, CreatedBy, AssignedTo, IsCompleted, DueDate, CreatedAt, ShowInCalendar)
+        INSERT INTO Subtasks (TaskID, Title, CreatedBy, ActedBy, AssignedTo, IsCompleted, DueDate, CreatedAt, ShowInCalendar)
         OUTPUT INSERTED.*
-        VALUES (@TaskID, @Title, @CreatedBy, @AssignedTo, 0, @DueDate, GETDATE(), @ShowInCalendar);
+        VALUES (@TaskID, @Title, @CreatedBy, @ActedBy, @AssignedTo, 0, @DueDate, GETDATE(), @ShowInCalendar);
       `);
 
     const newSubtask = result.recordset[0];

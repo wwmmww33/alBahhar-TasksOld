@@ -49,7 +49,17 @@ const profileRoutes = require('./routes/profileRoutes');
 const commentNotificationRoutes = require('./routes/commentNotificationRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const calendarRoutes = require('./routes/calendarRoutes');
-const { ensureSubtasksCalendarFlag, ensurePersonalEventsTable } = require('./utils/dbMigrations');
+const delegationRoutes = require('./routes/delegationRoutes');
+const {
+  ensureSubtasksCalendarFlag,
+  ensurePersonalEventsTable,
+  ensureActedByColumns,
+  ensureDelegationPasswordHashInUsers,
+  ensureDelegationSecretHashInTaskDelegations,
+  ensureTaskDelegationsTable,
+  ensureTaskDelegationPermissionsTable,
+  ensureCheckTaskDelegationPermissionFunction,
+} = require('./utils/dbMigrations');
 
 
 // --- 2. تسجيل كل مسارات الـ API ---
@@ -65,6 +75,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/comment-notifications', commentNotificationRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/calendar', calendarRoutes);
+app.use('/api/delegations', delegationRoutes);
 
 
 // --- 3. المسار الشامل (Catch-all) يجب أن يكون هو الأخير دائماً ---
@@ -94,6 +105,22 @@ const startServer = async () => {
       await ensurePersonalEventsTable(pool);
     } catch (eventsMigrationErr) {
       console.error('⚠️ Database migration (PersonalCalendarEvents) failed. Server continues running.', eventsMigrationErr);
+    }
+    // --- أعمدة ActedBy في الجداول الأساسية + عمود كلمة سر التفويض في المستخدمين ---
+    try {
+      await ensureActedByColumns(pool);
+      await ensureDelegationPasswordHashInUsers(pool);
+    } catch (actedByOrPassMigrationErr) {
+      console.error('⚠️ Database migration (ActedBy/DelegationPasswordHash) failed. Server continues running.', actedByOrPassMigrationErr);
+    }
+    // --- ترحيلات التفويض: الجداول والدالة المساعدة ---
+    try {
+      await ensureTaskDelegationsTable(pool);
+      await ensureDelegationSecretHashInTaskDelegations(pool);
+      await ensureTaskDelegationPermissionsTable(pool);
+      await ensureCheckTaskDelegationPermissionFunction(pool);
+    } catch (delegationMigrationErr) {
+      console.error('⚠️ Database migration (Delegation) failed. Server continues running.', delegationMigrationErr);
     }
     
     app.listen(port, '0.0.0.0', () => {

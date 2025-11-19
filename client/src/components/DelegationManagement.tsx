@@ -24,6 +24,7 @@ type NewDelegation = {
   DelegateID: string;
   StartDate: string;
   EndDate: string;
+  DelegationPassword?: string;
 };
 
 const DelegationManagement = () => {
@@ -34,38 +35,53 @@ const DelegationManagement = () => {
   const [newDelegation, setNewDelegation] = useState<NewDelegation>({
     DelegateID: '',
     StartDate: '',
-    EndDate: ''
+    EndDate: '',
+    DelegationPassword: ''
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    setLoading(true);
+    const storedUser = localStorage.getItem('albahar-user');
+    const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+    const userId = parsedUser?.UserID || '';
+    const currentDept = parsedUser?.DepartmentName || null;
+
     try {
-      setLoading(true);
-      const userId = localStorage.getItem('currentUserId');
-      const headers = {
-        'user-id': userId || '',
-        'Content-Type': 'application/json'
-      };
-      
-      const [delegationsRes, usersRes] = await Promise.all([
-        fetch('/api/delegations', { headers }),
-        fetch('/api/users', { headers })
-      ]);
-      
-      if (!delegationsRes.ok || !usersRes.ok) {
-        throw new Error('فشل في جلب البيانات');
+      const usersRes = await fetch('/api/users');
+      if (usersRes.ok) {
+        const usersData = await usersRes.json();
+        const filtered = usersData
+          .filter((user: User) => user.UserID !== userId)
+          .filter((user: User) => !currentDept || user.DepartmentName === currentDept);
+        setUsers(filtered);
+      } else {
+        setUsers([]);
       }
-      
-      const delegationsData = await delegationsRes.json();
-      const usersData = await usersRes.json();
-      
-      setDelegations(delegationsData);
-      setUsers(usersData.filter((user: User) => user.UserID !== localStorage.getItem('currentUserId')));
-      setError(null);
+    } catch (e) {
+      setUsers([]);
+    }
+
+    try {
+      if (userId) {
+        const headers = { 'user-id': userId, 'Content-Type': 'application/json' };
+        const delegationsRes = await fetch('/api/delegations', { headers });
+        if (delegationsRes.ok) {
+          const delegationsData = await delegationsRes.json();
+          setDelegations(delegationsData);
+          setError(null);
+        } else {
+          setDelegations([]);
+          setError('فشل في جلب التفويضات، قائمة الأسماء متاحة');
+        }
+      } else {
+        setDelegations([]);
+        setError(null);
+      }
     } catch (error) {
-      console.error('Failed to fetch data:', error);
-      setError('فشل في جلب البيانات');
+      console.error('Failed to fetch delegations:', error);
+      setError('فشل في جلب التفويضات، قائمة الأسماء متاحة');
     } finally {
       setLoading(false);
     }
@@ -81,12 +97,14 @@ const DelegationManagement = () => {
     
     try {
       setLoading(true);
-      const userId = localStorage.getItem('currentUserId');
+      const storedUser = localStorage.getItem('albahar-user');
+      const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+      const userId = parsedUser?.UserID || '';
       const response = await fetch('/api/delegations', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'user-id': userId || ''
+          'user-id': userId
         },
         body: JSON.stringify(newDelegation),
       });
@@ -95,8 +113,29 @@ const DelegationManagement = () => {
         const errorData = await response.json();
         throw new Error(errorData.message || 'فشل في إنشاء التفويض');
       }
-      
-      setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '' });
+      const created = await response.json();
+      const createdDelegationId: number | null = created?.DelegationID ?? null;
+
+      // حفظ سر التفويض الخاص بهذه العملية إن وُجد
+      if (createdDelegationId && newDelegation.DelegationPassword) {
+        const storedUser2 = localStorage.getItem('albahar-user');
+        const parsedUser2 = storedUser2 ? JSON.parse(storedUser2) : null;
+        const userId2 = parsedUser2?.UserID || '';
+        try {
+          await fetch(`/api/delegations/${createdDelegationId}/secret`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'user-id': userId2
+            },
+            body: JSON.stringify({ DelegationPassword: newDelegation.DelegationPassword })
+          });
+        } catch (e) {
+          // تجاهل الخطأ هنا؛ سيتمكن المستخدم من تحديث السر لاحقاً
+        }
+      }
+
+      setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '', DelegationPassword: '' });
       setShowCreateForm(false);
       fetchData();
       setError(null);
@@ -113,12 +152,14 @@ const DelegationManagement = () => {
     
     try {
       setLoading(true);
-      const userId = localStorage.getItem('currentUserId');
+      const storedUser = localStorage.getItem('albahar-user');
+      const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+      const userId = parsedUser?.UserID || '';
       const response = await fetch(`/api/delegations/${editingDelegation.DelegationID}`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'user-id': userId || ''
+          'user-id': userId
         },
         body: JSON.stringify({
           StartDate: editingDelegation.StartDate,
@@ -147,11 +188,13 @@ const DelegationManagement = () => {
     
     try {
       setLoading(true);
-      const userId = localStorage.getItem('currentUserId');
+      const storedUser = localStorage.getItem('albahar-user');
+      const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+      const userId = parsedUser?.UserID || '';
       const response = await fetch(`/api/delegations/${delegationId}`, {
         method: 'DELETE',
         headers: {
-          'user-id': userId || ''
+          'user-id': userId
         }
       });
       
@@ -234,8 +277,8 @@ const DelegationManagement = () => {
                 required
                 className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
               />
-            </div>
-            
+          </div>
+
             <div>
               <label className="block text-sm font-medium text-content mb-1">
                 تاريخ النهاية (اختياري)
@@ -245,6 +288,19 @@ const DelegationManagement = () => {
                 value={newDelegation.EndDate}
                 onChange={(e) => setNewDelegation({...newDelegation, EndDate: e.target.value})}
                 className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-content mb-1">
+                الرمز السري لهذا التفويض (اختياري)
+              </label>
+              <input
+                type="text"
+                value={newDelegation.DelegationPassword || ''}
+                onChange={(e) => setNewDelegation({...newDelegation, DelegationPassword: e.target.value})}
+                className="w-full p-2 border rounded bg-bkg border-content/20 text-content"
+                placeholder="أدخل السر الخاص بهذا التفويض"
               />
             </div>
             
@@ -260,7 +316,7 @@ const DelegationManagement = () => {
                 type="button"
                 onClick={() => {
                   setShowCreateForm(false);
-                  setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '' });
+                  setNewDelegation({ DelegateID: '', StartDate: '', EndDate: '', DelegationPassword: '' });
                 }}
                 className="border border-content/20 text-content px-4 py-2 rounded hover:bg-content/5"
               >

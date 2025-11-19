@@ -6,6 +6,7 @@ import { useNotification } from '../contexts/NotificationContext';
 import type { CurrentUser, Subtask, User, Category, Task, Comment } from '../types';
 import { Trash2, ExternalLink } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { getActiveUserId } from '../utils/activeAccount';
 
 type TaskDetailProps = { currentUser: CurrentUser; };
 
@@ -30,7 +31,8 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const fetchAllDetails = useCallback(async () => {
     if (!taskId) return;
     try {
-      const taskRes = await fetch(getApiUrl(`tasks/${taskId}?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`));
+      const actingUserId = getActiveUserId(currentUser.UserID);
+      const taskRes = await fetch(getApiUrl(`tasks/${taskId}?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`));
       if (!taskRes.ok) {
         if (taskRes.status === 403) {
           throw new Error('ليس لديك صلاحية للوصول إلى هذه المهمة.');
@@ -45,7 +47,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       
       // تحديث إشعارات التعليقات كمقروءة
       try {
-        await fetch(getApiUrl(`comment-notifications/task/${taskId}/user/${currentUser.UserID}/mark-read`), {
+        await fetch(getApiUrl(`comment-notifications/task/${taskId}/user/${actingUserId}/mark-read`), {
           method: 'PUT'
         });
         // تحديث قائمة المهام لإخفاء الإشعارات
@@ -56,8 +58,8 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
 
       if (taskData) {
         const [subtasksRes, commentsRes, usersRes] = await Promise.all([
-          fetch(getApiUrl(`tasks/${taskId}/subtasks?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)),
-          fetch(getApiUrl(`tasks/${taskId}/comments?userId=${currentUser.UserID}&isAdmin=${currentUser.IsAdmin}`)),
+          fetch(getApiUrl(`tasks/${taskId}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)),
+          fetch(getApiUrl(`tasks/${taskId}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)),
           fetch(getApiUrl(`tasks/department/${taskData.DepartmentID}/users`)),
         ]);
         
@@ -131,12 +133,13 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const updateTaskView = async () => {
     if (!taskId) return;
     try {
+      const actingUserId = getActiveUserId(currentUser.UserID);
       await fetch(getApiUrl(`tasks/${taskId}/view`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ userId: currentUser.UserID }),
+        body: JSON.stringify({ userId: actingUserId }),
       });
     } catch (error) {
       console.error('Error updating task view:', error);
@@ -159,7 +162,8 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
         
         const requestBody: any = {
             TaskID: taskId,
-            UserID: currentUser.UserID,
+            UserID: getActiveUserId(currentUser.UserID),
+            ActedBy: currentUser.UserID,
             Content: content
         };
         
@@ -207,7 +211,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       const response = await fetch(getApiUrl(`tasks/${taskId}`), {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.UserID })
+        body: JSON.stringify({ userId: getActiveUserId(currentUser.UserID) })
       });
       
       if (response.ok) {
@@ -229,8 +233,9 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   if (error) return <p className="text-center p-8 text-red-500">حدث خطأ: {error}</p>;
   if (!task) return <p className="text-center p-8">لم يتم العثور على المهمة.</p>;
 
-  const canCloseTask = currentUser.UserID === task.CreatedBy || currentUser.IsAdmin;
-  const canDeleteTask = currentUser.UserID === task.CreatedBy;
+  const actingUserId = getActiveUserId(currentUser.UserID);
+  const canCloseTask = actingUserId === task.CreatedBy || currentUser.IsAdmin;
+  const canDeleteTask = actingUserId === task.CreatedBy;
 
   return (
     <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md max-w-4xl mx-auto">
@@ -238,7 +243,10 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
         <div>
           <h1 className="text-4xl font-bold text-content mb-2">{task.Title}</h1>
           <div className="flex flex-wrap items-center gap-4 text-content-secondary mb-6">
-            <span>المنشيء: {task.CreatedByName || task.CreatedBy}</span>
+            <span>
+              المنشيء: {task.CreatedByName || task.CreatedBy}
+              {task.ActedBy ? ` بواسطة (${task.ActedByName || task.ActedBy})` : ''}
+            </span>
             <span className="text-sm">•</span>
             <span><strong>الحالة:</strong> <span className="font-semibold">{task.Status}</span></span>
             <span className="text-sm">•</span>

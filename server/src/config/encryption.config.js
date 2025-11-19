@@ -47,10 +47,11 @@ class EncryptionConfig {
      */
     hashPassword(password, salt = null) {
         // نحافظ على التهشير إن لزم، لكن نجعله تمريريًا لتلبية طلب حذف التشفير
-        if (!password || typeof password !== 'string') {
-            return { hash: password || '', salt: salt || '', combined: (salt || '') + ':' + (password || '') };
-        }
-        return { hash: password, salt: salt || '', combined: (salt || '') + ':' + password };
+        // إذا كان هناك Salt نستخدم صيغة "salt:password"، وإذا لم يوجد Salt نخزن كلمة المرور فقط بدون ":"
+        const usedSalt = salt || '';
+        const pwd = (typeof password === 'string') ? password : (password || '');
+        const combined = usedSalt ? `${usedSalt}:${pwd}` : `${pwd}`;
+        return { hash: pwd, salt: usedSalt, combined };
     }
 
     /**

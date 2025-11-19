@@ -12,9 +12,11 @@ import ProceduresManagement from './pages/ProceduresManagement';
 import ProcedureEdit from './pages/ProcedureEdit';
 import SystemManagement from './pages/SystemManagement';
 import UserProfile from './pages/UserProfile';
+import DelegationsPage from './pages/DelegationsPage';
 import CategoryManagementPage from './pages/CategoryManagementPage';
 import CategoryInfo from './pages/CategoryInfo';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { clearActiveAccount } from './utils/activeAccount';
 import type { CurrentUser } from './types';
 
 function App() {
@@ -45,6 +47,8 @@ function App() {
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('albahar-user');
+    // مسح حالة العمل نيابةً عن عند تسجيل الخروج
+    try { clearActiveAccount(); } catch {}
     navigate('/login');
   };
 
@@ -71,6 +75,7 @@ function App() {
                         <Route path="/categories" element={<CategoryManagementPage currentUser={currentUser} />} />
                         <Route path="/categories/:categoryId" element={<CategoryInfo currentUser={currentUser} />} />
                         <Route path="/profile" element={<UserProfile currentUser={currentUser} onUserUpdate={handleUserUpdate} />} />
+                        <Route path="/delegations" element={<DelegationsPage />} />
                         {currentUser.IsAdmin && <Route path="/system-management" element={<SystemManagement />} />}
                         
                         {/* 3. التوجيه الافتراضي أصبح إلى /tasks */}

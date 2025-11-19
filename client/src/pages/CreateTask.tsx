@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { CurrentUser } from '../types';
+import { getActiveUserId } from '../utils/activeAccount';
 import { getApiUrl } from '../config/api';
 
 // تعريف أنواع البيانات التي سنستخدمها
@@ -98,6 +99,7 @@ const handleSubmit = async (e: React.FormEvent) => {
   setIsSubmitting(true);
   setMessage(null);
 
+  const actingUserId = getActiveUserId(currentUser.UserID);
   const newTaskPayload = {
     Title: title,
     Description: description,
@@ -105,9 +107,10 @@ const handleSubmit = async (e: React.FormEvent) => {
     DepartmentID: currentUser.DepartmentID,
     Priority: 'normal',
     Status: 'open', // الحالة الافتراضية: مفتوحة
-    AssignedTo: currentUser.UserID,
+    AssignedTo: actingUserId,
     subtasks: subtasks,
-    CreatedBy: currentUser.UserID,
+    CreatedBy: actingUserId,
+    ActedBy: currentUser.UserID,
     CategoryID: selectedCategory ? parseInt(selectedCategory) : null,
   };
 

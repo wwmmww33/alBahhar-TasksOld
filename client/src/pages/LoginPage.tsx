@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { CurrentUser } from '../types';
+import { setActiveAccount, clearActiveAccount } from '../utils/activeAccount';
+import DelegationChoiceModal from '../components/DelegationChoiceModal';
 
 type LoginPageProps = {
   onLoginSuccess: (userData: CurrentUser) => void; 
@@ -14,6 +16,9 @@ const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
   
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showChoice, setShowChoice] = useState(false);
+  const [pendingUser, setPendingUser] = useState<CurrentUser | null>(null);
+  const [activeDelegators, setActiveDelegators] = useState<any[]>([]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,14 +36,73 @@ const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
       if (!response.ok) {
         throw new Error(data.message || 'Login failed');
       }
-      
-      onLoginSuccess(data.user);
+      const loggedInUser: CurrentUser = data.user;
+
+      // بعد تسجيل الدخول: معاينة التفويضات واقتراح اختيار الحساب النشط
+      try {
+        const delegationsRes = await fetch('/api/delegations/as-delegate', {
+          headers: {
+            'Content-Type': 'application/json',
+            'user-id': loggedInUser.UserID
+          }
+        });
+        let delegations: any[] = [];
+        if (delegationsRes.ok) {
+          try { delegations = await delegationsRes.json(); } catch { delegations = []; }
+        }
+
+        // نبحث عن تفويضات فعّالة حيث المستخدم الحالي هو المفوَّض إليه
+        const now = new Date();
+        const activeDelegators = (Array.isArray(delegations) ? delegations : []).filter((d: any) => {
+          const isDelegate = d?.DelegateID === loggedInUser.UserID;
+          const isActive = !!d?.IsActive;
+          const notExpired = !d?.EndDate || new Date(d.EndDate) >= now;
+          const started = !d?.StartDate || new Date(d.StartDate) <= now;
+          return isDelegate && isActive && notExpired && started;
+        });
+
+        if (activeDelegators.length === 0) {
+          // لا يوجد تفويض فعّال: العمل كنفسي
+          clearActiveAccount();
+          onLoginSuccess(loggedInUser);
+          setIsLoading(false);
+          return;
+        } else {
+          // إظهار مودال اختيار احترافي قبل إكمال الدخول
+          setActiveDelegators(activeDelegators);
+          setPendingUser(loggedInUser);
+          setShowChoice(true);
+          setIsLoading(false);
+          return; // لا تُكمل الآن، انتظر اختيار المستخدم
+        }
+      } catch {
+        // في حال فشل جلب التفويضات، نستمر بالدخول كنفسي
+        clearActiveAccount();
+        onLoginSuccess(loggedInUser);
+        setIsLoading(false);
+        return;
+      }
+      // لن نصل هنا بعد إعادة التنظيم أعلاه
 
     } catch (err: any) {
       setError(err.message);
     } finally {
-      setIsLoading(false);
+      // يتم ضبط isLoading حسب التدفق أعلاه
     }
+  };
+
+  const handleChooseSelf = () => {
+    clearActiveAccount();
+    if (pendingUser) onLoginSuccess(pendingUser);
+    setShowChoice(false);
+    setPendingUser(null);
+  };
+
+  const handleChooseDelegator = (delegator: any) => {
+    setActiveAccount({ userId: delegator.DelegatorID, userName: delegator.DelegatorName, mode: 'delegation' });
+    if (pendingUser) onLoginSuccess(pendingUser);
+    setShowChoice(false);
+    setPendingUser(null);
   };
 
   return (
@@ -78,6 +142,13 @@ const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
             <p className="text-sm text-gray-600 dark:text-gray-400">ليس لديك حساب؟ <Link to="/register" className="font-semibold text-blue-600 hover:underline dark:text-blue-400">أنشئ حساباً جديداً</Link></p>
         </div>
       </div>
+      <DelegationChoiceModal 
+        isOpen={showChoice}
+        userName={pendingUser?.FullName}
+        options={activeDelegators}
+        onChooseSelf={handleChooseSelf}
+        onChooseDelegator={handleChooseDelegator}
+      />
     </div>
   );
 };

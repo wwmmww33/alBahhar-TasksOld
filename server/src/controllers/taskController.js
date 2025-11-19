@@ -138,7 +138,7 @@ exports.assignTask = async (req, res) => {
 
 exports.createTask = async (req, res) => {
   // --- createTask المصحح (بدون AssignedTo) ---
-  const { Title, Description, DepartmentID, Priority, DueDate, subtasks, CreatedBy, CategoryID } = req.body;
+  const { Title, Description, DepartmentID, Priority, DueDate, subtasks, CreatedBy, ActedBy, CategoryID } = req.body;
   // تشفير الوصف إن وُجد
   const encryptedDescription = Description ? encryptionConfig.encrypt(Description) : null;
   const encryptedTitle = encryptionConfig.encrypt(Title);
@@ -149,20 +149,21 @@ exports.createTask = async (req, res) => {
   const transaction = new sql.Transaction(pool);
   try {
     await transaction.begin();
+    const actorUserId = ActedBy || CreatedBy;
     const taskResult = await new sql.Request(transaction)
       .input('Title', sql.NVarChar, encryptedTitle).input('Description', sql.NVarChar, encryptedDescription)
-      .input('CreatedBy', sql.NVarChar, CreatedBy).input('DepartmentID', sql.Int, DepartmentID)
+      .input('CreatedBy', sql.NVarChar, CreatedBy).input('ActedBy', sql.NVarChar, actorUserId).input('DepartmentID', sql.Int, DepartmentID)
       .input('Priority', sql.NVarChar, Priority || 'normal').input('DueDate', sql.DateTime, new Date(DueDate))
       .input('CategoryID', sql.Int, CategoryID || null)
-      .query(`INSERT INTO Tasks (Title, Description, CreatedBy, DepartmentID, Priority, DueDate, Status, CategoryID) OUTPUT INSERTED.TaskID VALUES (@Title, @Description, @CreatedBy, @DepartmentID, @Priority, @DueDate, 'open', @CategoryID);`);
+      .query(`INSERT INTO Tasks (Title, Description, CreatedBy, ActedBy, DepartmentID, Priority, DueDate, Status, CategoryID) OUTPUT INSERTED.TaskID VALUES (@Title, @Description, @CreatedBy, @ActedBy, @DepartmentID, @Priority, @DueDate, 'open', @CategoryID);`);
     const newTaskId = taskResult.recordset[0].TaskID;
     if (subtasks && subtasks.length > 0) {
       for (const subtaskTitle of subtasks) {
         const encSubtaskTitle = encryptionConfig.encrypt(subtaskTitle);
         await new sql.Request(transaction)
           .input('TaskID', sql.Int, newTaskId).input('Title', sql.NVarChar, encSubtaskTitle)
-          .input('CreatedBy', sql.NVarChar, CreatedBy).input('AssignedTo', sql.NVarChar, CreatedBy)
-          .query('INSERT INTO Subtasks (TaskID, Title, CreatedBy, AssignedTo, IsCompleted, CreatedAt) VALUES (@TaskID, @Title, @CreatedBy, @AssignedTo, 0, GETDATE())');
+          .input('CreatedBy', sql.NVarChar, CreatedBy).input('ActedBy', sql.NVarChar, actorUserId).input('AssignedTo', sql.NVarChar, CreatedBy)
+          .query('INSERT INTO Subtasks (TaskID, Title, CreatedBy, ActedBy, AssignedTo, IsCompleted, CreatedAt) VALUES (@TaskID, @Title, @CreatedBy, @ActedBy, @AssignedTo, 0, GETDATE())');
       }
     }
     await transaction.commit();
@@ -194,9 +195,10 @@ exports.getTaskById = async (req, res) => {
     
     // الحصول على تفاصيل المهمة مع معلومات إضافية
     const result = await pool.request().input('TaskID', sql.Int, id).query(`
-      SELECT t.*, creator.FullName as CreatedByName, c.Name as CategoryName
+      SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName
       FROM Tasks t
       LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+      LEFT JOIN Users acted ON t.ActedBy = acted.UserID
       LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
       WHERE t.TaskID = @TaskID
     `);
@@ -574,13 +576,14 @@ exports.getTasksWithNotifications = async (req, res) => {
     try {
         // استخدام الدالة المحدثة التي تدعم التفويض
         const baseQuery = await getTasksQueryWithDelegation(userId, isAdmin === 'true');
-        
-        // تعديل الاستعلام لإضافة معلومات الإشعارات
-        const query = baseQuery.replace(
-            'SELECT DISTINCT t.*, creator.FullName as CreatedByName, c.Name as CategoryName',
+
+        // تعديل الاستعلام لإضافة معلومات الإشعارات مع الحفاظ على ActedByName
+        let query = baseQuery.replace(
+            'SELECT DISTINCT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName',
             `SELECT DISTINCT
                 t.*,
                 creator.FullName as CreatedByName,
+                acted.FullName as ActedByName,
                 c.Name as CategoryName,
                 CASE 
                     WHEN EXISTS (
@@ -607,7 +610,45 @@ exports.getTasksWithNotifications = async (req, res) => {
                       AND cn.IsRead = 0
                       AND cn.CreatedAt > ISNULL(tv.LastViewedAt, '1900-01-01')
                 ) as HasCommentNotifications`
-        ).replace(
+        );
+
+        // دعم صيغة المدير بدون DISTINCT
+        query = query.replace(
+            'SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName',
+            `SELECT
+                t.*,
+                creator.FullName as CreatedByName,
+                acted.FullName as ActedByName,
+                c.Name as CategoryName,
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1 FROM Subtasks s 
+                        WHERE s.TaskID = t.TaskID
+                    ) THEN 1
+                    ELSE 0
+                END as HasNewSubtasks,
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1 FROM TaskAssignmentNotifications tan 
+                        WHERE tan.TaskID = t.TaskID 
+                        AND tan.AssignedToUserID = '${userId}'
+                        AND tan.IsRead = 0
+                        AND tan.CreatedAt > ISNULL(tv.LastViewedAt, '1900-01-01')
+                    ) THEN 1
+                    ELSE 0
+                END as HasAssignmentNotifications,
+                (
+                    SELECT COUNT(*) 
+                    FROM CommentNotifications cn
+                    WHERE cn.TaskID = t.TaskID
+                      AND cn.NotifyUserID = '${userId}'
+                      AND cn.IsRead = 0
+                      AND cn.CreatedAt > ISNULL(tv.LastViewedAt, '1900-01-01')
+                ) as HasCommentNotifications`
+        );
+
+        // إضافة الربط مع TaskViews لأي صيغة
+        query = query.replace(
             'LEFT JOIN Categories c ON t.CategoryID = c.CategoryID',
             `LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
              LEFT JOIN TaskViews tv ON tv.TaskID = t.TaskID AND tv.UserID = '${userId}'`
