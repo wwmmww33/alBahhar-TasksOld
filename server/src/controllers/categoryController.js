@@ -108,8 +108,8 @@ const getCategoryById = async (req, res) => {
 // إنشاء تصنيف جديد
 const createCategory = async (req, res) => {
     try {
-        const { name, description, departmentId } = req.body;
-        const createdBy = req.user?.userId || 'admin'; // مؤقت حتى يتم تفعيل المصادقة
+        const { name, description, departmentId, createdBy: createdByBody } = req.body;
+        const createdBy = req.user?.userId || createdByBody || 'admin'; // استخدام معرف المنشئ القادم من الواجهة عند غياب المصادقة
         
         if (!name || !departmentId) {
             return res.status(400).json({ error: 'اسم التصنيف والقسم مطلوبان' });
@@ -255,51 +255,94 @@ const updateCategory = async (req, res) => {
     }
 };
 
-// حذف تصنيف (حذف منطقي)
+// حذف تصنيف (حذف منطقي) مع دعم إعادة تعيين المهام أو جعلها بلا تصنيف
 const deleteCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
-        
+        const { createdBy, action, newCategoryId } = req.body || {};
+
         const pool = await sql.connect(dbConfig);
-        
+
         // التحقق من وجود التصنيف والصلاحية
         const existingCategory = await pool.request()
             .input('CategoryID', sql.Int, categoryId)
-            .query('SELECT CategoryID, CreatedBy FROM Categories WHERE CategoryID = @CategoryID AND IsActive = 1');
-        
+            .query('SELECT CategoryID, CreatedBy, DepartmentID FROM Categories WHERE CategoryID = @CategoryID AND IsActive = 1');
+
         if (existingCategory.recordset.length === 0) {
             return res.status(404).json({ error: 'التصنيف غير موجود' });
         }
-        
+
         // التحقق من أن المستخدم هو من أنشأ التصنيف
-        const userId = req.user?.userId || req.body.createdBy || 'admin';
+        const userId = req.user?.userId || createdBy || 'admin';
         if (existingCategory.recordset[0].CreatedBy !== userId) {
             return res.status(403).json({ error: 'ليس لديك صلاحية لحذف هذا التصنيف' });
         }
-        
-        // التحقق من عدم وجود مهام مرتبطة بهذا التصنيف
+
+        // التحقق من وجود مهام مرتبطة بهذا التصنيف
         const linkedTasks = await pool.request()
             .input('CategoryID', sql.Int, categoryId)
             .query('SELECT COUNT(*) as TaskCount FROM Tasks WHERE CategoryID = @CategoryID');
-        
-        if (linkedTasks.recordset[0].TaskCount > 0) {
-            return res.status(400).json({ error: 'لا يمكن حذف التصنيف لوجود مهام مرتبطة به' });
+
+        const taskCount = linkedTasks.recordset[0].TaskCount;
+        if (taskCount > 0) {
+            if (action === 'reassign') {
+                if (!newCategoryId) {
+                    return res.status(400).json({ error: 'معرّف التصنيف الجديد مطلوب لإعادة التعيين', taskCount });
+                }
+                const targetCat = await pool.request()
+                    .input('NewCategoryID', sql.Int, newCategoryId)
+                    .query('SELECT CategoryID, DepartmentID FROM Categories WHERE CategoryID = @NewCategoryID AND IsActive = 1');
+                if (targetCat.recordset.length === 0) {
+                    return res.status(404).json({ error: 'التصنيف الهدف غير موجود', taskCount });
+                }
+                const sourceDept = existingCategory.recordset[0].DepartmentID;
+                const targetDept = targetCat.recordset[0].DepartmentID;
+                if (sourceDept !== targetDept) {
+                    return res.status(400).json({ error: 'يجب أن يكون التصنيف الهدف ضمن نفس القسم', taskCount });
+                }
+                await pool.request()
+                    .input('OldCategoryID', sql.Int, categoryId)
+                    .input('NewCategoryID', sql.Int, newCategoryId)
+                    .query('UPDATE Tasks SET CategoryID = @NewCategoryID WHERE CategoryID = @OldCategoryID');
+            } else if (action === 'uncategorize') {
+                await pool.request()
+                    .input('OldCategoryID', sql.Int, categoryId)
+                    .query('UPDATE Tasks SET CategoryID = NULL WHERE CategoryID = @OldCategoryID');
+            } else {
+                return res.status(409).json({ error: 'يوجد مهام مرتبطة بهذا التصنيف. اختر إعادة تعيين أو جعله بلا تصنيف.', taskCount });
+            }
         }
-        
+
         // حذف التصنيف منطقياً
         await pool.request()
             .input('CategoryID', sql.Int, categoryId)
             .query('UPDATE Categories SET IsActive = 0, UpdatedAt = GETDATE() WHERE CategoryID = @CategoryID');
-        
+
         // حذف معلومات التصنيف منطقياً
         await pool.request()
             .input('CategoryID', sql.Int, categoryId)
             .query('UPDATE CategoryInformation SET IsActive = 0, UpdatedAt = GETDATE() WHERE CategoryID = @CategoryID');
-        
-        res.json({ message: 'تم حذف التصنيف بنجاح' });
+
+        res.json({ message: 'تم حذف التصنيف بنجاح', reassignedTasks: taskCount });
     } catch (error) {
         console.error('Error deleting category:', error);
         res.status(500).json({ error: 'خطأ في حذف التصنيف' });
+    }
+};
+
+// عدد المهام المرتبطة بتصنيف
+const getLinkedTaskCount = async (req, res) => {
+    try {
+        const { categoryId } = req.params;
+        const pool = await sql.connect(dbConfig);
+        const result = await pool.request()
+            .input('CategoryID', sql.Int, categoryId)
+            .query('SELECT COUNT(*) as TaskCount FROM Tasks WHERE CategoryID = @CategoryID');
+        const count = result.recordset[0]?.TaskCount || 0;
+        res.json({ taskCount: count });
+    } catch (error) {
+        console.error('Error fetching linked task count:', error);
+        res.status(500).json({ error: 'خطأ في جلب عدد المهام المرتبطة' });
     }
 };
 
@@ -511,5 +554,6 @@ module.exports = {
     deleteCategory,
     addCategoryInformation,
     updateCategoryInformation,
-    deleteCategoryInformation
+    deleteCategoryInformation,
+    getLinkedTaskCount
 };

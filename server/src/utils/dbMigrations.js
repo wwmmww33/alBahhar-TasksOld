@@ -268,4 +268,28 @@ module.exports = {
       throw err;
     }
   }
+  ,
+  // إضافة عمود URL إلى جدول Tasks إن لم يكن موجودًا (آمن للتشغيل المتكرر)
+  ensureTaskUrlColumn: async function ensureTaskUrlColumn(pool) {
+    try {
+      const check = await pool.request().query(`SELECT COL_LENGTH('dbo.Tasks', 'URL') AS Len`);
+      const exists = !!(check.recordset && check.recordset[0] && check.recordset[0].Len);
+      if (exists) {
+        console.log('ℹ️ URL column already exists in Tasks.');
+        return { changed: false };
+      }
+      const alter = `
+        IF COL_LENGTH('dbo.Tasks', 'URL') IS NULL
+        BEGIN
+          ALTER TABLE dbo.Tasks ADD URL NVARCHAR(1000) NULL;
+        END
+      `;
+      await pool.request().query(alter);
+      console.log('✅ Added URL column to Tasks table.');
+      return { changed: true };
+    } catch (err) {
+      console.error('❌ Failed ensuring URL column in Tasks:', err);
+      throw err;
+    }
+  }
 };

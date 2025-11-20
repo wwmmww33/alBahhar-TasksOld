@@ -6,7 +6,7 @@ const sql = require('mssql');
 const cors = require('cors');
 
 const app = express();
-const port = process.env.PORT || 5001;
+const port = process.env.PORT || 5002;
 
 // --- Middlewares ---
 app.use(cors());
@@ -59,6 +59,7 @@ const {
   ensureTaskDelegationsTable,
   ensureTaskDelegationPermissionsTable,
   ensureCheckTaskDelegationPermissionFunction,
+  ensureTaskUrlColumn,
 } = require('./utils/dbMigrations');
 
 
@@ -121,6 +122,13 @@ const startServer = async () => {
       await ensureCheckTaskDelegationPermissionFunction(pool);
     } catch (delegationMigrationErr) {
       console.error('⚠️ Database migration (Delegation) failed. Server continues running.', delegationMigrationErr);
+    }
+
+    // --- ترحيل عمود URL في جدول المهام ---
+    try {
+      await ensureTaskUrlColumn(pool);
+    } catch (urlMigrationErr) {
+      console.error('⚠️ Database migration (Tasks.URL) failed. Server continues running.', urlMigrationErr);
     }
     
     app.listen(port, '0.0.0.0', () => {

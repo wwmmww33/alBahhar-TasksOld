@@ -31,6 +31,11 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean; categoryId: number | null; taskCount: number }>(
+    { open: false, categoryId: null, taskCount: 0 }
+  );
+  const [deleteAction, setDeleteAction] = useState<'uncategorize' | 'reassign' | null>(null);
+  const [replacementCategoryId, setReplacementCategoryId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -103,7 +108,8 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
         body: JSON.stringify({
           name: formData.name,
           description: formData.description,
-          departmentId: formData.departmentId
+          departmentId: formData.departmentId,
+          createdBy: currentUser.UserID
         }),
       });
 
@@ -119,22 +125,72 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
     }
   };
 
-  // حذف تصنيف
+  // حذف تصنيف مع فحص المهام المرتبطة وخيارات إعادة التعيين
   const handleDeleteCategory = async (categoryId: number) => {
-    if (!confirm('هل أنت متأكد من حذف هذا التصنيف؟')) return;
-
     try {
-      const response = await fetch(getApiUrl(`categories/${categoryId}`), {
+      // جلب عدد المهام المرتبطة بالتصنيف
+      const countRes = await fetch(getApiUrl(`categories/${categoryId}/linked-tasks-count`));
+      if (!countRes.ok) {
+        throw new Error('تعذر جلب عدد المهام المرتبطة');
+      }
+      const countData = await countRes.json();
+      const taskCount = countData.taskCount ?? 0;
+
+      if (taskCount === 0) {
+        if (!confirm('لا توجد مهام مرتبطة. هل تريد حذف التصنيف؟')) return;
+        const response = await fetch(getApiUrl(`categories/${categoryId}`), {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ createdBy: currentUser.UserID })
+        });
+        if (!response.ok) {
+          throw new Error('فشل في حذف التصنيف');
+        }
+        await fetchCategories();
+      } else {
+        // فتح مربع حوار لاختيار الإجراء قبل الحذف
+        setDeleteModal({ open: true, categoryId, taskCount });
+        setDeleteAction(null);
+        setReplacementCategoryId(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'حدث خطأ في حذف التصنيف');
+    }
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!deleteModal.open || !deleteModal.categoryId) return;
+    try {
+      if (!deleteAction) {
+        setError('يرجى اختيار إجراء الحذف');
+        return;
+      }
+      if (deleteAction === 'reassign' && !replacementCategoryId) {
+        setError('يرجى اختيار تصنيف بديل لإعادة التعيين');
+        return;
+      }
+
+      const response = await fetch(getApiUrl(`categories/${deleteModal.categoryId}`), {
         method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          createdBy: currentUser.UserID,
+          action: deleteAction,
+          newCategoryId: deleteAction === 'reassign' ? replacementCategoryId : undefined
+        })
       });
 
       if (!response.ok) {
-        throw new Error('فشل في حذف التصنيف');
+        const errText = await response.text();
+        throw new Error(errText || 'فشل في حذف التصنيف');
       }
 
+      setDeleteModal({ open: false, categoryId: null, taskCount: 0 });
+      setDeleteAction(null);
+      setReplacementCategoryId(null);
       await fetchCategories();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'حدث خطأ في حذف التصنيف');
+      setError(err instanceof Error ? err.message : 'حدث خطأ في عملية الحذف');
     }
   };
 
@@ -185,13 +241,11 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
         </div>
       )}
 
-      {/* نموذج الإضافة/التعديل */}
-      {(showAddForm || editingCategory) && (
+      {/* نموذج الإضافة فقط */}
+      {showAddForm && (
         <div className="bg-gray-50 p-4 rounded-lg mb-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {editingCategory ? 'تعديل التصنيف' : 'إضافة تصنيف جديد'}
-          </h3>
-          <form onSubmit={editingCategory ? handleEditCategory : handleAddCategory}>
+          <h3 className="text-lg font-semibold mb-4">إضافة تصنيف جديد</h3>
+          <form onSubmit={handleAddCategory}>
             <div className="mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -223,13 +277,13 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
                 type="submit"
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
               >
-                {editingCategory ? 'حفظ التعديلات' : 'إضافة التصنيف'}
+                إضافة التصنيف
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setShowAddForm(false);
-                  cancelEdit();
+                  setFormData({ name: '', description: '', departmentId: currentUser.DepartmentID || 0 });
                 }}
                 className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
               >
@@ -288,10 +342,117 @@ const CategoryManagement: React.FC<CategoryManagementProps> = ({ currentUser }) 
                   )}
                 </div>
               </div>
+
+              {/* نموذج تعديل يظهر مباشرة أسفل التصنيف المحدد */}
+              {editingCategory && editingCategory.CategoryID === category.CategoryID && (
+                <div className="bg-gray-50 p-4 rounded-lg mt-4">
+                  <h4 className="text-md font-semibold mb-3">تعديل التصنيف: {category.Name}</h4>
+                  <form onSubmit={handleEditCategory}>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">اسم التصنيف</label>
+                      <input
+                        type="text"
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">وصف التصنيف</label>
+                      <textarea
+                        value={formData.description}
+                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        حفظ التعديلات
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
+
+      {/* مربع حوار تأكيد الحذف وإعادة التعيين */}
+      {deleteModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-6">
+            <h3 className="text-xl font-bold mb-4">تأكيد الحذف</h3>
+            <p className="text-gray-700 mb-3">
+              يوجد {deleteModal.taskCount} مهمة مرتبطة بهذا التصنيف. اختر طريقة التعامل قبل الحذف:
+            </p>
+            <div className="space-y-3 mb-4">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={deleteAction === 'uncategorize'}
+                  onChange={() => setDeleteAction('uncategorize')}
+                />
+                <span>جعل المهام بلا تصنيف</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={deleteAction === 'reassign'}
+                  onChange={() => setDeleteAction('reassign')}
+                />
+                <span>إعادة تعيين المهام إلى تصنيف آخر</span>
+              </label>
+            </div>
+            {deleteAction === 'reassign' && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">اختر التصنيف البديل</label>
+                <select
+                  value={replacementCategoryId ?? ''}
+                  onChange={(e) => setReplacementCategoryId(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="" disabled>اختر تصنيفًا</option>
+                  {categories
+                    .filter(c => c.DepartmentID === currentUser.DepartmentID && c.CategoryID !== deleteModal.categoryId)
+                    .map(c => (
+                      <option key={c.CategoryID} value={c.CategoryID}>{c.Name}</option>
+                    ))}
+                </select>
+              </div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setDeleteModal({ open: false, categoryId: null, taskCount: 0 });
+                  setDeleteAction(null);
+                  setReplacementCategoryId(null);
+                }}
+                className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmDeleteCategory}
+                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                disabled={deleteAction === 'reassign' && !replacementCategoryId}
+              >
+                حذف التصنيف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

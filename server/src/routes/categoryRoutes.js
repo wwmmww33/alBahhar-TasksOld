@@ -15,6 +15,9 @@ router.get('/:categoryId/information', categoryController.getCategoryInformation
 // GET /api/categories/:categoryId - الحصول على تصنيف واحد مع معلوماته
 router.get('/:categoryId', categoryController.getCategoryById);
 
+// GET /api/categories/:categoryId/linked-tasks-count - عدد المهام المرتبطة بتصنيف
+router.get('/:categoryId/linked-tasks-count', categoryController.getLinkedTaskCount);
+
 // POST /api/categories - إنشاء تصنيف جديد
 router.post('/', categoryController.createCategory);
 

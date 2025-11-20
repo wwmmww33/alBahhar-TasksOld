@@ -27,6 +27,9 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const [isEditingCategory, setIsEditingCategory] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [isUpdatingCategory, setIsUpdatingCategory] = useState(false);
+  const [isEditingURL, setIsEditingURL] = useState(false);
+  const [urlInput, setUrlInput] = useState<string>('');
+  const [isUpdatingURL, setIsUpdatingURL] = useState(false);
 
   const fetchAllDetails = useCallback(async () => {
     if (!taskId) return;
@@ -41,6 +44,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       }
       const taskData: Task = await taskRes.json();
       setTask(taskData);
+      setUrlInput((taskData as any).URL || '');
       
       // تسجيل المهمة كمشاهدة
       markTaskAsViewed(parseInt(taskId));
@@ -121,6 +125,30 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       setError('حدث خطأ أثناء تحديث التصنيف');
     } finally {
       setIsUpdatingCategory(false);
+    }
+  };
+
+  const handleUpdateTaskURL = async (newUrl: string | null) => {
+    if (!task || isUpdatingURL) return;
+    setIsUpdatingURL(true);
+    try {
+      const response = await fetch(getApiUrl(`tasks/${task.TaskID}/url`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: newUrl })
+      });
+      if (response.ok) {
+        await fetchAllDetails();
+        setIsEditingURL(false);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'فشل في تحديث الرابط');
+      }
+    } catch (error) {
+      console.error('Failed to update task URL:', error);
+      setError('حدث خطأ أثناء تحديث الرابط');
+    } finally {
+      setIsUpdatingURL(false);
     }
   };
 
@@ -328,6 +356,59 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
                       </button>
                     )}
                   </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Task External URL Section */}
+          <div className="flex flex-wrap items-center gap-4 text-content-secondary mb-2">
+            <span><strong>الرابط الخارجي:</strong></span>
+            {isEditingURL ? (
+              <div className="flex items-center gap-2 w-full max-w-xl">
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="https://example.com/path"
+                  className="flex-1 p-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-content text-sm"
+                />
+                <button
+                  onClick={() => handleUpdateTaskURL(urlInput.trim() ? urlInput.trim() : null)}
+                  disabled={isUpdatingURL}
+                  className="px-2 py-1 bg-primary text-white rounded-md hover:bg-primary/90 disabled:bg-gray-400 text-sm"
+                >
+                  {isUpdatingURL ? 'جاري الحفظ...' : 'حفظ'}
+                </button>
+                <button
+                  onClick={() => { setIsEditingURL(false); setUrlInput((task as any)?.URL || ''); }}
+                  className="px-2 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 text-sm"
+                >
+                  إلغاء
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {(task as any)?.URL ? (
+                  <a
+                    href={(task as any).URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline flex items-center gap-1 text-sm"
+                  >
+                    <ExternalLink size={14} />
+                    فتح الرابط
+                  </a>
+                ) : (
+                  <span className="text-content-secondary italic">لا يوجد رابط</span>
+                )}
+                {canCloseTask && (
+                  <button
+                    onClick={() => { setIsEditingURL(true); setUrlInput((task as any)?.URL || ''); }}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    {(task as any)?.URL ? 'تعديل' : 'إضافة رابط'}
+                  </button>
                 )}
               </div>
             )}

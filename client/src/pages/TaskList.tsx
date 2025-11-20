@@ -40,6 +40,17 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   const [selectedTasks, setSelectedTasks] = useState<Set<number>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   
+  // وضع عرض المهام: شبكة أو قائمة
+  const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>((localStorage.getItem('task-layout') as 'grid' | 'list') || 'grid');
+  useEffect(() => {
+    const onLayoutChange = () => {
+      const val = (localStorage.getItem('task-layout') as 'grid' | 'list') || 'grid';
+      setLayoutMode(val);
+    };
+    window.addEventListener('tasks:layout-changed', onLayoutChange as any);
+    return () => window.removeEventListener('tasks:layout-changed', onLayoutChange as any);
+  }, []);
+  
   // 2. حالة جديدة للفلتر
   const [filterMode, setFilterMode] = useState<'all' | 'my-created'>('all');
   
@@ -894,18 +905,33 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </div>
           {activeTasks.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {activeTasks.map(task => (
-                <TaskCard 
-                  key={task.TaskID} 
-                  task={task} 
-                  onPriorityChange={updateTaskPriority}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedTasks.has(task.TaskID)}
-                  onToggleSelection={toggleTaskSelection}
-                />
-              ))}
-            </div>
+            layoutMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {activeTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {activeTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 
@@ -930,18 +956,33 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </div>
           {externalTasks.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {externalTasks.map(task => (
-                <TaskCard 
-                  key={task.TaskID} 
-                  task={task} 
-                  onPriorityChange={updateTaskPriority}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedTasks.has(task.TaskID)}
-                  onToggleSelection={toggleTaskSelection}
-                />
-              ))}
-            </div>
+            layoutMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {externalTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {externalTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 
@@ -966,18 +1007,33 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </div>
           {approvedTasks.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {approvedTasks.map(task => (
-                <TaskCard 
-                  key={task.TaskID} 
-                  task={task} 
-                  onPriorityChange={updateTaskPriority}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedTasks.has(task.TaskID)}
-                  onToggleSelection={toggleTaskSelection}
-                />
-              ))}
-            </div>
+            layoutMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {approvedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {approvedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 
@@ -1002,18 +1058,33 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </div>
           {actionedTasks.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {actionedTasks.map(task => (
-                <TaskCard 
-                  key={task.TaskID} 
-                  task={task} 
-                  onPriorityChange={updateTaskPriority}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedTasks.has(task.TaskID)}
-                  onToggleSelection={toggleTaskSelection}
-                />
-              ))}
-            </div>
+            layoutMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {actionedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {actionedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 
@@ -1038,18 +1109,33 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </div>
           {completedTasks.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 opacity-80">
-              {completedTasks.map(task => (
-                <TaskCard 
-                  key={task.TaskID} 
-                  task={task} 
-                  onPriorityChange={updateTaskPriority}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedTasks.has(task.TaskID)}
-                  onToggleSelection={toggleTaskSelection}
-                />
-              ))}
-            </div>
+            layoutMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 opacity-80">
+                {completedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4 opacity-80">
+                {completedTasks.map(task => (
+                  <TaskCard 
+                    key={task.TaskID} 
+                    task={task} 
+                    onPriorityChange={updateTaskPriority}
+                    isSelectionMode={isSelectionMode}
+                    isSelected={selectedTasks.has(task.TaskID)}
+                    onToggleSelection={toggleTaskSelection}
+                  />
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 

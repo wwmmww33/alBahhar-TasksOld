@@ -578,6 +578,40 @@ exports.updateTaskView = async (req, res) => {
     }
 };
 
+// تحديث رابط المهمة الخارجي (URL)
+exports.updateTaskUrl = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { id } = req.params;
+    let { url } = req.body;
+
+    // قبول إفراغ الرابط بإرسال قيمة فارغة
+    if (url !== undefined && typeof url === 'string') {
+        url = url.trim();
+        if (url.length === 0) {
+            url = null;
+        }
+    }
+
+    // التحقق الأساسي من المدخلات
+    if (url !== null && url !== undefined && typeof url !== 'string') {
+        return res.status(400).json({ message: 'Invalid url type' });
+    }
+    if (url && url.length > 1000) {
+        return res.status(400).json({ message: 'URL is too long (max 1000 chars)' });
+    }
+
+    try {
+        await pool.request()
+            .input('TaskID', sql.Int, id)
+            .input('URL', sql.NVarChar, url || null)
+            .query('UPDATE Tasks SET URL = @URL WHERE TaskID = @TaskID');
+        res.status(200).json({ message: 'Task URL updated successfully' });
+    } catch (error) {
+        console.error('UPDATE TASK URL ERROR:', error);
+        res.status(500).send({ message: 'Error updating task URL' });
+    }
+};
+
 // الحصول على المهام مع معلومات الإشعارات
 exports.getTasksWithNotifications = async (req, res) => {
     const pool = req.app.locals.db;

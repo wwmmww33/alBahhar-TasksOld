@@ -1,5 +1,6 @@
 // src/components/Navbar.tsx
-import { Sun, Moon, LogOut, ListTodo, PlusCircle, FileText, Shield, User, FolderOpen, Share2 } from 'lucide-react';
+import { Sun, Moon, LogOut, ListTodo, PlusCircle, FileText, Shield, User, FolderOpen, Share2, LayoutGrid, List } from 'lucide-react';
+import { useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeProvider';
 import UnifiedNotifications from './UnifiedNotifications';
@@ -14,6 +15,7 @@ type NavbarProps = {
 const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
   // استخدام الطريقة الجديدة مع dispatch
   const { theme, mode, dispatch } = useTheme();
+  const [taskLayout, setTaskLayout] = useState<'grid' | 'list'>((localStorage.getItem('task-layout') as 'grid' | 'list') || 'grid');
   const navigate = useNavigate();
 
   const handleThemeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -22,6 +24,16 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
 
   const handleToggleMode = () => {
     dispatch({ type: 'TOGGLE_MODE' });
+  };
+
+  const handleToggleTaskLayout = () => {
+    const next = taskLayout === 'grid' ? 'list' : 'grid';
+    setTaskLayout(next);
+    try {
+      localStorage.setItem('task-layout', next);
+    } catch (_) {}
+    // إعلام الصفحات بالاستماع للتغيير
+    window.dispatchEvent(new Event('tasks:layout-changed'));
   };
 
   const handleNotificationClick = (taskId: number) => {
@@ -74,6 +86,11 @@ const Navbar = ({ currentUser, onLogout }: NavbarProps) => {
         
         <button onClick={handleToggleMode} title="Toggle Dark/Light Mode" className="p-2 rounded-full text-content-secondary hover:bg-content/10 hover:text-content transition-colors">
           {mode === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+        </button>
+
+        {/* زر تبديل عرض المهام: شبكة / قائمة */}
+        <button onClick={handleToggleTaskLayout} title="تبديل عرض المهام: شبكة/قائمة" className="p-2 rounded-full text-content-secondary hover:bg-content/10 hover:text-content transition-colors">
+          {taskLayout === 'grid' ? <List size={20} /> : <LayoutGrid size={20} />}
         </button>
         
         <div className="h-8 border-l border-content/10"></div>

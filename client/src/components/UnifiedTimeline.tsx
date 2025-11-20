@@ -46,6 +46,28 @@ const UnifiedTimeline = ({
   isSubmittingComment
 }: UnifiedTimelineProps) => {
   const { refreshTasks, refreshNotifications } = useNotification();
+  const renderWithLinks = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+    const elements: (string | JSX.Element)[] = [];
+    let lastIndex = 0;
+    text.replace(urlRegex, (match, _p1, offset) => {
+      if (offset > lastIndex) {
+        elements.push(text.slice(lastIndex, offset));
+      }
+      const href = match.startsWith('http') ? match : `http://${match}`;
+      elements.push(
+        <a href={href} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
+          {match}
+        </a>
+      );
+      lastIndex = offset + match.length;
+      return match;
+    });
+    if (lastIndex < text.length) {
+      elements.push(text.slice(lastIndex));
+    }
+    return elements;
+  };
   const getUserNameById = (id?: string) => {
     if (!id) return '';
     return users.find(u => u.UserID === id)?.FullName || id;
@@ -464,7 +486,7 @@ const UnifiedTimeline = ({
         </div>
         <div className="flex-grow">
           <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-            <p className="text-content mb-2">{comment.Content}</p>
+            <p className="text-content mb-2 break-words whitespace-pre-wrap">{renderWithLinks(comment.Content)}</p>
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
                 <p className="text-xs text-content-secondary">

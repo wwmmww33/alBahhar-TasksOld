@@ -28,6 +28,7 @@ export type Task = {
   ActedBy?: string;
   DepartmentID: number;
   CategoryID?: number | null;
+  URL?: string | null;
   CreatedAt: string;
   UpdatedAt: string;
   DueDate: string | null;
