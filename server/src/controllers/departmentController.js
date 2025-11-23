@@ -1,4 +1,17 @@
 const sql = require('mssql');
+
+let _deptColsCache = null;
+const resolveDeptColumns = async (pool) => {
+    if (_deptColsCache) return _deptColsCache;
+    const q = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Departments'";
+    const result = await pool.request().query(q);
+    const names = new Set(result.recordset.map(r => r.COLUMN_NAME));
+    const parentCol = names.has('ParentID') ? 'ParentID' : (names.has('ParentDepartmentID') ? 'ParentDepartmentID' : null);
+    const activeCol = names.has('IsActive') ? 'IsActive' : (names.has('Active') ? 'Active' : null);
+    _deptColsCache = { parentCol, activeCol };
+    return _deptColsCache;
+};
+
 exports.getAllDepartments = async (req, res) => {
     const pool = req.app.locals.db;
     try {
@@ -10,7 +23,22 @@ exports.createDepartment = async (req, res) => {
     const pool = req.app.locals.db;
     const { Name } = req.body;
     try {
-        const result = await pool.request().input('Name', sql.NVarChar, Name).query('INSERT INTO Departments (Name) OUTPUT INSERTED.* VALUES (@Name)');
+        const cols = await resolveDeptColumns(pool);
+        const parent = req.body.ParentID ?? req.body.ParentDepartmentID ?? null;
+        const activeVal = req.body.IsActive ?? req.body.Active;
+        const active = typeof activeVal === 'boolean' ? activeVal : (typeof activeVal === 'number' ? activeVal !== 0 : null);
+
+        const reqq = pool.request().input('Name', sql.NVarChar, Name);
+        if (cols.parentCol) reqq.input('Parent', sql.Int, parent);
+        if (cols.activeCol) reqq.input('Active', sql.Bit, active === null ? true : active);
+
+        let query = 'INSERT INTO Departments (Name';
+        let values = 'VALUES (@Name';
+        if (cols.parentCol) { query += `, ${cols.parentCol}`; values += ', @Parent'; }
+        if (cols.activeCol) { query += `, ${cols.activeCol}`; values += ', @Active'; }
+        query += `) OUTPUT INSERTED.* ${values})`;
+
+        const result = await reqq.query(query);
         res.status(201).json(result.recordset[0]);
     } catch (error) { res.status(500).send({ message: 'Error creating department' }); }
 };
@@ -19,7 +47,20 @@ exports.updateDepartment = async (req, res) => {
     const { id } = req.params;
     const { Name } = req.body;
     try {
-        await pool.request().input('DepartmentID', sql.Int, id).input('Name', sql.NVarChar, Name).query('UPDATE Departments SET Name = @Name WHERE DepartmentID = @DepartmentID');
+        const cols = await resolveDeptColumns(pool);
+        const parent = req.body.ParentID ?? req.body.ParentDepartmentID ?? null;
+        const activeVal = req.body.IsActive ?? req.body.Active;
+        const active = typeof activeVal === 'boolean' ? activeVal : (typeof activeVal === 'number' ? activeVal !== 0 : null);
+
+        const reqq = pool.request().input('DepartmentID', sql.Int, id).input('Name', sql.NVarChar, Name);
+        if (cols.parentCol) reqq.input('Parent', sql.Int, parent);
+        if (cols.activeCol) reqq.input('Active', sql.Bit, active === null ? true : active);
+
+        let setParts = ['Name = @Name'];
+        if (cols.parentCol) setParts.push(`${cols.parentCol} = @Parent`);
+        if (cols.activeCol) setParts.push(`${cols.activeCol} = @Active`);
+        const query = `UPDATE Departments SET ${setParts.join(', ')} WHERE DepartmentID = @DepartmentID`;
+        await reqq.query(query);
         res.status(200).json({ message: 'Department updated successfully' });
     } catch (error) { res.status(500).send({ message: 'Error updating department' }); }
 };
