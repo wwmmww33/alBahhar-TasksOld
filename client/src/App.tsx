@@ -15,6 +15,7 @@ import UserProfile from './pages/UserProfile';
 import DelegationsPage from './pages/DelegationsPage';
 import CategoryManagementPage from './pages/CategoryManagementPage';
 import CategoryInfo from './pages/CategoryInfo';
+import CalendarPage from './pages/CalendarPage';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { clearActiveAccount } from './utils/activeAccount';
 import type { CurrentUser } from './types';
@@ -76,6 +77,7 @@ function App() {
                         <Route path="/categories/:categoryId" element={<CategoryInfo currentUser={currentUser} />} />
                         <Route path="/profile" element={<UserProfile currentUser={currentUser} onUserUpdate={handleUserUpdate} />} />
                         <Route path="/delegations" element={<DelegationsPage />} />
+                        <Route path="/calendar" element={<CalendarPage currentUser={currentUser} />} />
                         {currentUser.IsAdmin && <Route path="/system-management" element={<SystemManagement />} />}
                         
                         {/* 3. التوجيه الافتراضي أصبح إلى /tasks */}

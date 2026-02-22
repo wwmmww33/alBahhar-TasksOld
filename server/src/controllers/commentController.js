@@ -5,7 +5,7 @@ const { hasActiveDelegation } = require('../utils/delegationUtils');
 
 exports.createComment = async (req, res) => {
     const pool = req.app.locals.db;
-    const { TaskID, UserID, ActedBy, Content, CreatedAt } = req.body;
+    const { TaskID, UserID, ActedBy, Content, CreatedAt, ShowInCalendar } = req.body;
 
     if (!TaskID || !UserID || !Content) {
         return res.status(400).json({ message: 'TaskID, UserID, and Content are required.' });
@@ -47,9 +47,10 @@ exports.createComment = async (req, res) => {
             .input('ActedBy', sql.NVarChar, actorUserId)
             .input('Content', sql.NVarChar, encryptionConfig.encrypt(Content))
             .input('CreatedAt', sql.DateTime, commentCreatedAt)
+            .input('ShowInCalendar', sql.Bit, ShowInCalendar ? 1 : 0)
             .query(`
-                INSERT INTO Comments (TaskID, UserID, ActedBy, Content, CreatedAt)
-                VALUES (@TaskID, @UserID, @ActedBy, @Content, @CreatedAt);
+                INSERT INTO Comments (TaskID, UserID, ActedBy, Content, CreatedAt, ShowInCalendar)
+                VALUES (@TaskID, @UserID, @ActedBy, @Content, @CreatedAt, @ShowInCalendar);
             `);
         
         // جلب التعليق المضاف حديثاً
@@ -135,10 +136,125 @@ exports.createComment = async (req, res) => {
                   WHERE cn.CommentID = @CommentID AND cn.NotifyUserID = s.CreatedBy
               );
         `);
-        // إزالة القوس الزائد وضمان استمرار التنفيذ
         res.status(201).json(newComment);
     } catch (error) {
         console.error("CREATE COMMENT ERROR:", error);
         res.status(500).send({ message: 'Error creating comment' });
+    }
+};
+
+exports.updateComment = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { commentId } = req.params;
+    const { Content, UserID, ShowInCalendar } = req.body || {};
+
+    if (!commentId || !UserID) {
+        return res.status(400).json({ message: 'commentId and UserID are required.' });
+    }
+
+    if (typeof Content === 'undefined' && typeof ShowInCalendar === 'undefined') {
+        return res.status(400).json({ message: 'Nothing to update. Provide Content and/or ShowInCalendar.' });
+    }
+
+    try {
+        const existingResult = await pool.request()
+            .input('CommentID', sql.Int, commentId)
+            .query('SELECT TOP 1 CommentID, UserID, ActedBy FROM Comments WHERE CommentID = @CommentID');
+
+        if (!existingResult.recordset.length) {
+            return res.status(404).json({ message: 'Comment not found.' });
+        }
+
+        const existing = existingResult.recordset[0];
+        const actingUserId = UserID.toString();
+
+        if (existing.UserID !== actingUserId && existing.ActedBy !== actingUserId) {
+            return res.status(403).json({ message: 'لا تملك صلاحية تعديل هذا التعليق.' });
+        }
+
+        const request = pool.request().input('CommentID', sql.Int, commentId);
+        const setClauses = [];
+
+        if (typeof Content !== 'undefined') {
+            const encryptedContent = encryptionConfig.encrypt(Content);
+            request.input('Content', sql.NVarChar, encryptedContent);
+            setClauses.push('Content = @Content');
+        }
+
+        if (typeof ShowInCalendar !== 'undefined') {
+            request.input('ShowInCalendar', sql.Bit, ShowInCalendar ? 1 : 0);
+            setClauses.push('ShowInCalendar = @ShowInCalendar');
+        }
+
+        const setSql = setClauses.join(', ');
+
+        await request.query(`UPDATE Comments SET ${setSql} WHERE CommentID = @CommentID`);
+
+        const updatedResult = await pool.request()
+            .input('CommentID', sql.Int, commentId)
+            .query('SELECT * FROM Comments WHERE CommentID = @CommentID');
+
+        if (!updatedResult.recordset.length) {
+            return res.status(404).json({ message: 'Comment not found after update.' });
+        }
+
+        const updatedComment = updatedResult.recordset[0];
+        if (updatedComment.Content) {
+            try { updatedComment.Content = encryptionConfig.decrypt(updatedComment.Content); } catch (e) {}
+        }
+
+        res.status(200).json(updatedComment);
+    } catch (error) {
+        console.error('UPDATE COMMENT ERROR:', error);
+        res.status(500).send({ message: 'Error updating comment' });
+    }
+};
+
+exports.deleteComment = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { commentId } = req.params;
+    const { UserID } = req.body || {};
+
+    if (!commentId || !UserID) {
+        return res.status(400).json({ message: 'commentId and UserID are required.' });
+    }
+
+    const transaction = new sql.Transaction(pool);
+
+    try {
+        await transaction.begin();
+
+        const existingResult = await new sql.Request(transaction)
+            .input('CommentID', sql.Int, commentId)
+            .query('SELECT TOP 1 CommentID, UserID, ActedBy FROM Comments WHERE CommentID = @CommentID');
+
+        if (!existingResult.recordset.length) {
+            await transaction.rollback();
+            return res.status(404).json({ message: 'Comment not found.' });
+        }
+
+        const existing = existingResult.recordset[0];
+        const actingUserId = UserID.toString();
+
+        if (existing.UserID !== actingUserId && existing.ActedBy !== actingUserId) {
+            await transaction.rollback();
+            return res.status(403).json({ message: 'لا تملك صلاحية حذف هذا التعليق.' });
+        }
+
+        await new sql.Request(transaction)
+            .input('CommentID', sql.Int, commentId)
+            .query('DELETE FROM CommentNotifications WHERE CommentID = @CommentID');
+
+        await new sql.Request(transaction)
+            .input('CommentID', sql.Int, commentId)
+            .query('DELETE FROM Comments WHERE CommentID = @CommentID');
+
+        await transaction.commit();
+
+        res.status(200).json({ message: 'Comment deleted successfully' });
+    } catch (error) {
+        try { await transaction.rollback(); } catch (_) {}
+        console.error('DELETE COMMENT ERROR:', error);
+        res.status(500).send({ message: 'Error deleting comment' });
     }
 };

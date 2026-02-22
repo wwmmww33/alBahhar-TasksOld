@@ -10,6 +10,7 @@ import { Loader2, ClipboardCopy, Filter, User, Users, ChevronDown } from 'lucide
 type Task = {
   TaskID: number;
   Title: string;
+  Description?: string;
   CreatedBy: string;
   CreatedByName?: string | null;
   AssignedToName: string | null;
@@ -21,6 +22,8 @@ type Task = {
   HasAssignmentNotifications?: number;
   HasCommentNotifications?: number;
 };
+
+type ExportMode = 'title_creator' | 'tasks_incomplete_subtasks' | 'full';
 
 type TaskListProps = { currentUser: CurrentUser; };
 
@@ -35,6 +38,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   
   // حالة للتحكم في قائمة التصدير المنسدلة
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportConfig, setExportConfig] = useState<{ tasks: Task[]; title: string } | null>(null);
   
   // حالة جديدة لاختيار المهام للتصدير
   const [selectedTasks, setSelectedTasks] = useState<Set<number>>(new Set());
@@ -60,7 +64,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   const [assigneeFilterUserId, setAssigneeFilterUserId] = useState<string | null>(null);
   
   // 4. حالة جديدة للتبويبات
-  const [activeTab, setActiveTab] = useState<'active' | 'external' | 'approved' | 'completed' | 'actioned'>('active');
+  const [activeTab, setActiveTab] = useState<'active' | 'external' | 'completed' | 'actioned'>('active');
 
   const fetchTasksAndSubtasks = useCallback(async () => {
     setIsLoading(true);
@@ -177,76 +181,146 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     // تم تعطيل تحديث قائمة المهام عند عودة التركيز إلى النافذة
   }, [fetchTasksAndSubtasks, setRefreshTasks]);
 
-  // حالة تتبع جلب تفاصيل المهام المكتملة عند طلبها
-  const [completedDetailsFetched, setCompletedDetailsFetched] = useState(false);
+  // حالة وتتبع تحميل المهام المكتملة على دفعات
+  const [completedPage, setCompletedPage] = useState(1);
+  const [isLoadingCompleted, setIsLoadingCompleted] = useState(false);
+  const [completedHasMore, setCompletedHasMore] = useState(true);
+  const [isSearchingCompleted, setIsSearchingCompleted] = useState(false);
 
-  // جلب تفاصيل المهام المكتملة عند فتح تبويبها لأول مرة
-  useEffect(() => {
-    const fetchCompletedDetails = async () => {
-      try {
-        const completedTasksOnly = tasks.filter(t => t.Status === 'completed' || t.Status === 'cancelled');
-        if (completedTasksOnly.length === 0) {
-          setCompletedDetailsFetched(true);
-          return;
+  // دالة لجلب 10 مهام مكتملة إضافية عند الطلب (لا يتم استدعاؤها تلقائياً)
+  const loadMoreCompletedTasks = async () => {
+    try {
+      if (isLoadingCompleted || !completedHasMore) return;
+
+      setIsLoadingCompleted(true);
+      const actingUserId = getActiveUserId(currentUser.UserID);
+      const isAdmin = currentUser.IsAdmin;
+      const pageSize = 10;
+
+      const completedTasksRes = await fetch(`/api/tasks/completed?userId=${actingUserId}&isAdmin=${isAdmin}&page=${completedPage}&pageSize=${pageSize}`);
+      if (!completedTasksRes.ok) {
+        setCompletedHasMore(false);
+        return;
+      }
+
+      const completedTasksData: Task[] = await completedTasksRes.json();
+      if (!Array.isArray(completedTasksData) || completedTasksData.length === 0) {
+        setCompletedHasMore(false);
+        return;
+      }
+
+      const BATCH_SIZE = 6;
+      const fetchInBatches = async <T,>(items: Task[], batchSize: number, fn: (task: Task) => Promise<T>): Promise<T[]> => {
+        const results: T[] = [];
+        for (let i = 0; i < items.length; i += batchSize) {
+          const batch = items.slice(i, i + batchSize);
+          const batchResults = await Promise.all(batch.map(fn));
+          results.push(...batchResults);
         }
-        const BATCH_SIZE = 6;
-        const fetchInBatches = async <T,>(items: Task[], batchSize: number, fn: (task: Task) => Promise<T>): Promise<T[]> => {
-          const results: T[] = [];
-          for (let i = 0; i < items.length; i += batchSize) {
-            const batch = items.slice(i, i + batchSize);
-            const batchResults = await Promise.all(batch.map(fn));
-            results.push(...batchResults);
-          }
-          return results;
-        };
+        return results;
+      };
 
-        const actingUserId = getActiveUserId(currentUser.UserID);
-        const completedSubtasks = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
-            .then(res => res.status === 403 ? [] : res.json())
-            .catch(() => [])
-        );
+      const completedSubtasks = await fetchInBatches(completedTasksData, BATCH_SIZE, async (task) =>
+        fetch(`/api/tasks/${task.TaskID}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
+          .then(res => res.status === 403 ? [] : res.json())
+          .catch(() => [])
+      );
 
-        const completedComments = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
-            .then(res => res.status === 403 ? [] : res.json())
-            .catch(() => [])
-        );
+      const completedComments = await fetchInBatches(completedTasksData, BATCH_SIZE, async (task) =>
+        fetch(`/api/tasks/${task.TaskID}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)
+          .then(res => res.status === 403 ? [] : res.json())
+          .catch(() => [])
+      );
 
-        const completedPriorities = await fetchInBatches(completedTasksOnly, BATCH_SIZE, async (task) =>
-          fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${actingUserId}`)
-            .then(res => res.json())
-            .catch(() => ({ priority: task.Priority }))
-        );
+      const completedPriorities = await fetchInBatches(completedTasksData, BATCH_SIZE, async (task) =>
+        fetch(`/api/tasks/${task.TaskID}/user-priority?userId=${actingUserId}`)
+          .then(res => res.json())
+          .catch(() => ({ priority: task.Priority }))
+      );
 
-        // دمج التفاصيل في الحالة الحالية
-        setTasks(prev => {
-          const byId: Record<number, { subtasks: Subtask[]; comments: Comment[]; priority: 'normal' | 'urgent' | 'starred'; }> = {};
-          completedTasksOnly.forEach((t, idx) => {
-            byId[t.TaskID] = {
-              subtasks: completedSubtasks[idx] || [],
-              comments: completedComments[idx] || [],
-              priority: completedPriorities[idx]?.priority || t.Priority,
-            };
-          });
-          return prev.map(t => {
-            const det = byId[t.TaskID];
-            if (!det) return t;
-            return { ...t, subtasks: det.subtasks, comments: det.comments, Priority: det.priority };
-          });
+      // دمج المهام المكتملة في الحالة الحالية مع تفاصيلها
+      setTasks(prev => {
+        const byId: Record<number, { subtasks: Subtask[]; comments: Comment[]; priority: 'normal' | 'urgent' | 'starred'; }> = {};
+        completedTasksData.forEach((t, idx) => {
+          byId[t.TaskID] = {
+            subtasks: completedSubtasks[idx] || [],
+            comments: completedComments[idx] || [],
+            priority: completedPriorities[idx]?.priority || t.Priority,
+          };
         });
 
-        setCompletedDetailsFetched(true);
-      } catch (e) {
-        // في حالة الخطأ، لا نمنع الصفحة من العمل؛ فقط نُبقي التفاصيل فارغة
-        console.error('Error fetching completed task details:', e);
-      }
-    };
+        // تحديث المهام الموجودة أو إضافتها إن لم تكن موجودة
+        const existingIds = new Set(prev.map(t => t.TaskID));
+        const updated = prev.map(t => {
+          const det = byId[t.TaskID];
+          if (!det) return t;
+          return { ...t, subtasks: det.subtasks, comments: det.comments, Priority: det.priority };
+        });
 
-    if (activeTab === 'completed' && !completedDetailsFetched) {
-      fetchCompletedDetails();
+        const newCompleted = completedTasksData
+          .filter(t => !existingIds.has(t.TaskID))
+          .map(t => {
+            const det = byId[t.TaskID];
+            return {
+              ...t,
+              subtasks: det ? det.subtasks : [],
+              comments: det ? det.comments : [],
+              Priority: det ? det.priority : t.Priority,
+              HasCommentNotifications: typeof t.HasCommentNotifications === 'number' ? t.HasCommentNotifications : 0
+            };
+          });
+
+        return [...updated, ...newCompleted];
+      });
+
+      // إذا كانت أقل من حجم الصفحة، فليس هناك المزيد
+      if (completedTasksData.length < pageSize) {
+        setCompletedHasMore(false);
+      }
+
+      setCompletedPage(prev => prev + 1);
+    } catch (e) {
+      console.error('Error fetching completed task details:', e);
+    } finally {
+      setIsLoadingCompleted(false);
     }
-  }, [activeTab, completedDetailsFetched, tasks, currentUser.UserID, currentUser.IsAdmin]);
+  };
+
+  // دالة للبحث في المهام المكتملة في قاعدة البيانات
+  const searchCompletedTasksInDb = async () => {
+    const term = searchTerm.trim();
+    if (!term) return;
+
+    try {
+      setIsSearchingCompleted(true);
+      const actingUserId = getActiveUserId(currentUser.UserID);
+      const isAdmin = currentUser.IsAdmin;
+
+      const res = await fetch(`/api/tasks/completed/search?userId=${actingUserId}&isAdmin=${isAdmin}&q=${encodeURIComponent(term)}`);
+      if (!res.ok) {
+        return;
+      }
+
+      const completedTasksData: Task[] = await res.json();
+
+      setTasks(prev => {
+        // الحفاظ على المهام غير المكتملة كما هي
+        const nonCompleted = prev.filter(
+          t => t.Status !== 'completed' && t.Status !== 'cancelled'
+        );
+
+        // دمج نتائج البحث المكتملة بدون تكرار
+        const existingIds = new Set(nonCompleted.map(t => t.TaskID));
+        const mergedCompleted = completedTasksData.filter(t => !existingIds.has(t.TaskID));
+
+        return [...nonCompleted, ...mergedCompleted];
+      });
+    } catch (e) {
+      console.error('Error searching completed tasks in DB:', e);
+    } finally {
+      setIsSearchingCompleted(false);
+    }
+  };
 
   // دالة لتحديث أولوية المهمة
   const updateTaskPriority = async (taskId: number, newPriority: 'normal' | 'urgent' | 'starred') => {
@@ -279,11 +353,10 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     }
   };
 
-  // 4. دالة لتصدير المهام (محسنة)
-  const handleExport = (tasksToExport: Task[], title: string) => {
+  const buildExportContent = (tasksToExport: Task[], title: string, mode: ExportMode) => {
     const formatDate = (dateString: string) => {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-GB'); // التاريخ الميلادي
+      return date.toLocaleDateString('en-GB');
     };
 
     let exportContent = `=== ${title} ===\n`;
@@ -291,10 +364,29 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     exportContent += `عدد المهام: ${tasksToExport.length}\n\n`;
 
     tasksToExport.forEach((task, index) => {
+      if (mode === 'title_creator') {
+        exportContent += `${index + 1}. ${task.Title}\n`;
+        exportContent += `   👤 المنشئ: ${task.CreatedByName || task.CreatedBy}\n\n`;
+        return;
+      }
+
       exportContent += `${index + 1}. ${task.Title}\n`;
       exportContent += `   📅 تاريخ الاستحقاق: ${formatDate(task.DueDate)}\n`;
-      
-      // المهام الفرعية
+
+      if (mode === 'tasks_incomplete_subtasks') {
+        const incompleteSubtasks = (task.subtasks || []).filter(st => !st.IsCompleted);
+        if (incompleteSubtasks.length > 0) {
+          exportContent += `   📋 المهام الفرعية غير المنجزة (${incompleteSubtasks.length}):\n`;
+          incompleteSubtasks.forEach((subtask, subIndex) => {
+            exportContent += `      ${subIndex + 1}. ⏳ ${subtask.Title}\n`;
+          });
+        } else {
+          exportContent += `   لا توجد مهام فرعية غير منجزة.\n`;
+        }
+        exportContent += `\n`;
+        return;
+      }
+
       if (task.subtasks && task.subtasks.length > 0) {
         exportContent += `   📋 المهام الفرعية (${task.subtasks.length}):\n`;
         task.subtasks.forEach((subtask, subIndex) => {
@@ -302,8 +394,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
           exportContent += `      ${subIndex + 1}. ${statusIcon} ${subtask.Title}\n`;
         });
       }
-      
-      // التعليقات
+
       if (task.comments && task.comments.length > 0) {
         exportContent += `   💬 التعليقات (${task.comments.length}):\n`;
         task.comments.forEach((comment, commentIndex) => {
@@ -311,25 +402,38 @@ const TaskList = ({ currentUser }: TaskListProps) => {
           exportContent += `      ${commentIndex + 1}. ${comment.Content} - (${comment.UserName || comment.UserID}, ${commentDate})\n`;
         });
       }
-      
+
       exportContent += `\n`;
     });
 
-    setExportText(exportContent);
+    return exportContent;
+  };
+
+  const startExport = (tasksToExport: Task[], title: string) => {
+    if (!tasksToExport.length) {
+      setExportText('لا توجد مهام للتصدير في هذا التبويب.');
+      setShowExportMenu(false);
+      return;
+    }
+    setExportConfig({ tasks: tasksToExport, title });
     setShowExportMenu(false);
   };
 
-  // دوال التصدير المختلفة
-  const handleExportAll = () => handleExport(tasks, 'جميع المهام');
+  const handleExportWithMode = (mode: ExportMode) => {
+    if (!exportConfig) return;
+    const content = buildExportContent(exportConfig.tasks, exportConfig.title, mode);
+    setExportText(content);
+    setExportConfig(null);
+  };
+
   const handleExportUrgent = () => {
     const urgentTasks = tasks.filter(task => task.Priority === 'urgent');
-    handleExport(urgentTasks, 'المهام العاجلة');
+    startExport(urgentTasks, 'المهام العاجلة');
   };
   
-  // دالة تصدير المهام المختارة
   const handleExportSelected = () => {
     const selectedTasksList = tasks.filter(task => selectedTasks.has(task.TaskID));
-    handleExport(selectedTasksList, 'المهام المختارة');
+    startExport(selectedTasksList, 'المهام المختارة');
     setIsSelectionMode(false);
     setSelectedTasks(new Set());
   };
@@ -360,7 +464,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     switch (activeTab) {
       case 'active': return activeTasks;
       case 'external': return externalTasks;
-      case 'approved': return approvedTasks;
       case 'completed': return completedTasks;
       case 'actioned': return actionedTasks;
       default: return activeTasks;
@@ -405,6 +508,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
     // فلتر حسب البحث
     const matchesSearch = !searchTerm.trim() || 
       task.Title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (task.Description && task.Description.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (task.CreatedByName && task.CreatedByName.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (task.AssignedToName && task.AssignedToName.toLowerCase().includes(searchTerm.toLowerCase())) ||
       // البحث في المهام الفرعية
@@ -462,7 +566,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   });
   const completedTasks = filteredTasks.filter(task => task.Status === 'completed' || task.Status === 'cancelled');
   const externalTasks = filteredTasks.filter(task => task.Status === 'external');
-  const approvedTasks = filteredTasks.filter(task => task.Status === 'approved-in-progress');
   
   // المهام التي أنجزت إجرائي فيها:
   // - إما أكملت كل المهام الفرعية المسندة إليّ
@@ -542,7 +645,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   const activeTabNotifications = getTabNotifications(activeTasks);
   const actionedTabNotifications = getTabNotifications(actionedTasks);
   const externalTabNotifications = getTabNotifications(externalTasks);
-  const approvedTabNotifications = getTabNotifications(approvedTasks);
   const completedTabNotifications = getTabNotifications(completedTasks);
 
   // حساب إجمالي الإشعارات لكل تبويب
@@ -565,7 +667,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
   sortTasks(actionedTasks);
   sortTasks(completedTasks);
   sortTasks(externalTasks);
-  sortTasks(approvedTasks);
 
   if (isLoading) return <div className="flex justify-center items-center p-8"><Loader2 className="animate-spin text-primary" size={48} /></div>;
   if (error) return <p className="text-center p-8 text-red-500">حدث خطأ: {error}</p>;
@@ -685,46 +786,28 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             {showExportMenu && (
               <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg border z-10">
                 <button
-                  onClick={handleExportAll}
-                  className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                >
-                  📋 جميع المهام
-                </button>
-                <button
                   onClick={handleExportUrgent}
                   className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
                   🔴 المهام العاجلة فقط
                 </button>
                 <button
-                  onClick={() => handleExport(activeTasks, 'المهام النشطة')}
+                  onClick={() => startExport(activeTasks, 'المهام النشطة')}
                   className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
                   ⚡ المهام النشطة
                 </button>
                 <button
-                  onClick={() => handleExport(completedTasks, 'المهام المكتملة')}
-                  className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                >
-                  ✅ المهام المكتملة
-                </button>
-                <button
-                  onClick={() => handleExport(externalTasks, 'المهام الخارجية')}
+                  onClick={() => startExport(externalTasks, 'المهام الخارجية')}
                   className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
                   🏢 المهام الخارجية
                 </button>
                 <button
-                  onClick={() => handleExport(approvedTasks, 'المهام المعتمدة')}
+                  onClick={() => startExport(actionedTasks, 'المهام التي أنجزت إجرائي فيها')}
                   className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
-                  ✅⚡ المهام المعتمدة
-                </button>
-                <button
-                  onClick={() => handleExport(actionedTasks, 'المهام المنجزة إجرائياً')}
-                  className="w-full text-right px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                >
-                  ✅📋 المهام المنجزة إجرائياً
+                  ✅ المهام التي أنجزت إجرائي فيها
                 </button>
                 <hr className="my-1" />
                 <button
@@ -750,7 +833,45 @@ const TaskList = ({ currentUser }: TaskListProps) => {
         </div>
       </div>
 
-      {/* --- 3. كود النافذة المنبثقة (Modal) --- */}
+      {exportConfig && !exportText && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setExportConfig(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-content mb-2">خيارات التصدير</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              سيتم التصدير من: {exportConfig.title}
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={() => handleExportWithMode('title_creator')}
+                className="w-full text-right px-4 py-2 rounded-md border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-sm"
+              >
+                1) تصدير عنوان المهمة والمنشئ فقط
+              </button>
+              <button
+                onClick={() => handleExportWithMode('tasks_incomplete_subtasks')}
+                className="w-full text-right px-4 py-2 rounded-md border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-sm"
+              >
+                2) تصدير المهام والمهام الفرعية غير المنجزة
+              </button>
+              <button
+                onClick={() => handleExportWithMode('full')}
+                className="w-full text-right px-4 py-2 rounded-md border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-sm"
+              >
+                3) تصدير المهام والمهام الفرعية بالكامل والتعليقات
+              </button>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setExportConfig(null)}
+                className="bg-gray-200 dark:bg-gray-600 px-4 py-2 rounded-md text-sm"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {exportText && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setExportText(null)}>
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
@@ -845,28 +966,6 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             </div>
           </button>
           <button
-            onClick={() => setActiveTab('approved')}
-            className={`px-6 py-3 font-medium transition-colors ${
-              activeTab === 'approved'
-                ? 'text-primary border-b-2 border-primary bg-blue-50 dark:bg-blue-900/20'
-                : 'text-gray-600 dark:text-gray-400 hover:text-primary'
-            }`}
-          >
-            ✅⚡ المهام المعتمدة ({approvedTasks.length})
-            <div className="flex items-center gap-1 ml-2">
-              {approvedTabNotifications.assignment > 0 && (
-                <span className="inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-red-500 rounded-full animate-pulse">
-                  {approvedTabNotifications.assignment}
-                </span>
-              )}
-              {approvedTabNotifications.comment > 0 && (
-                <span className="inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-green-500 rounded-full animate-pulse">
-                  {approvedTabNotifications.comment}
-                </span>
-              )}
-            </div>
-          </button>
-          <button
             onClick={() => setActiveTab('completed')}
             className={`px-6 py-3 font-medium transition-colors ${
               activeTab === 'completed'
@@ -874,7 +973,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
                 : 'text-gray-600 dark:text-gray-400 hover:text-primary'
             }`}
           >
-            ✅ المهام المكتملة ({completedTasks.length})
+            ✅ المهام المكتملة
             <div className="flex items-center gap-1 ml-2">
               {completedTabNotifications.assignment > 0 && (
                 <span className="inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-red-500 rounded-full animate-pulse">
@@ -994,56 +1093,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
         </div>
       )}
 
-      {activeTab === 'approved' && (
-        <div>
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-3xl font-bold text-content border-b-2 border-emerald-500 pb-2">المهام المعتمدة</h1>
-              {searchTerm.trim() && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                  عُثر على {approvedTasks.length} مهمة معتمدة تطابق البحث
-                </p>
-              )}
-            </div>
-          </div>
-          {approvedTasks.length > 0 ? (
-            layoutMode === 'grid' ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {approvedTasks.map(task => (
-                  <TaskCard 
-                    key={task.TaskID} 
-                    task={task} 
-                    onPriorityChange={updateTaskPriority}
-                    isSelectionMode={isSelectionMode}
-                    isSelected={selectedTasks.has(task.TaskID)}
-                    onToggleSelection={toggleTaskSelection}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                {approvedTasks.map(task => (
-                  <TaskCard 
-                    key={task.TaskID} 
-                    task={task} 
-                    onPriorityChange={updateTaskPriority}
-                    isSelectionMode={isSelectionMode}
-                    isSelected={selectedTasks.has(task.TaskID)}
-                    onToggleSelection={toggleTaskSelection}
-                  />
-                ))}
-              </div>
-            )
-          ) : (
-            <p className="text-content-secondary text-center py-4">
-              {searchTerm.trim() 
-                ? `لم يتم العثور على مهام معتمدة تطابق البحث "${searchTerm}"`
-                : "لا توجد مهام معتمدة حالياً."
-              }
-            </p>
-          )}
-        </div>
-      )}
+      
 
       {activeTab === 'actioned' && (
         <div>
@@ -1108,6 +1158,43 @@ const TaskList = ({ currentUser }: TaskListProps) => {
               )}
             </div>
           </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
+            <div className="flex justify-center sm:justify-start">
+              <button
+                onClick={loadMoreCompletedTasks}
+                disabled={isLoadingCompleted || !completedHasMore}
+                className={`px-4 py-2 rounded-md text-sm font-medium ${
+                  isLoadingCompleted || !completedHasMore
+                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                    : 'bg-green-500 text-white hover:bg-green-600'
+                }`}
+              >
+                {isLoadingCompleted
+                  ? 'جاري جلب المهام المكتملة...'
+                  : completedHasMore
+                    ? 'جلب 10 مهام مكتملة إضافية'
+                    : 'لا توجد مهام مكتملة أخرى للعرض'}
+              </button>
+            </div>
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              <button
+                onClick={searchCompletedTasksInDb}
+                disabled={isSearchingCompleted || !searchTerm.trim()}
+                className={`px-4 py-2 rounded-md text-sm font-medium ${
+                  isSearchingCompleted || !searchTerm.trim()
+                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+              >
+                {isSearchingCompleted ? 'جاري البحث في قاعدة البيانات...' : 'بحث في المهام المكتملة من قاعدة البيانات'}
+              </button>
+              {!searchTerm.trim() && (
+                <span className="text-xs text-gray-500 text-center sm:text-right">
+                  أدخل كلمة في مربع البحث بالأعلى ثم اضغط زر البحث هنا.
+                </span>
+              )}
+            </div>
+          </div>
           {completedTasks.length > 0 ? (
             layoutMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 opacity-80">
@@ -1140,8 +1227,7 @@ const TaskList = ({ currentUser }: TaskListProps) => {
             <p className="text-content-secondary text-center py-4">
               {searchTerm.trim() 
                 ? `لم يتم العثور على مهام مكتملة تطابق البحث "${searchTerm}"`
-                : "لا توجد مهام مكتملة بعد."
-              }
+                : null}
             </p>
           )}
         </div>

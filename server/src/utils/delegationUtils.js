@@ -135,7 +135,7 @@ async function getDelegatesForUser(delegatorUserId) {
 async function getTasksQueryWithDelegation(userId, isAdmin) {
   try {
     if (isAdmin) {
-      // المدير يرى جميع المهام
+      // المدير يرى جميع المهام غير المكتملة فقط لتخفيف العبء
       return `
         SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName,
                CASE WHEN t.CreatedBy = '${userId}' THEN 'owner' ELSE 'admin' END as AccessType
@@ -143,6 +143,7 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
         LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
         LEFT JOIN Users acted ON t.ActedBy = acted.UserID
         LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
+        WHERE t.Status NOT IN ('completed', 'cancelled')
         ORDER BY t.CreatedAt DESC
       `;
     }
@@ -167,9 +168,12 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
       LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
       LEFT JOIN Users acted ON t.ActedBy = acted.UserID
       LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
-      WHERE t.CreatedBy = '${userId}' 
-         OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
-         ${delegationCondition}
+      WHERE t.Status NOT IN ('completed', 'cancelled')
+        AND (
+          t.CreatedBy = '${userId}' 
+          OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
+          ${delegationCondition}
+        )
       ORDER BY t.CreatedAt DESC
     `;
   } catch (error) {
@@ -182,8 +186,11 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
       LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
       LEFT JOIN Users acted ON t.ActedBy = acted.UserID
       LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
-      WHERE t.CreatedBy = '${userId}' 
-         OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
+      WHERE t.Status NOT IN ('completed', 'cancelled')
+        AND (
+          t.CreatedBy = '${userId}' 
+          OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
+        )
       ORDER BY t.CreatedAt DESC
     `;
   }

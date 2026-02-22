@@ -582,7 +582,7 @@ exports.updateTaskView = async (req, res) => {
 exports.updateTaskUrl = async (req, res) => {
     const pool = req.app.locals.db;
     const { id } = req.params;
-    let { url } = req.body;
+    let { url, Description } = req.body;
 
     // قبول إفراغ الرابط بإرسال قيمة فارغة
     if (url !== undefined && typeof url === 'string') {
@@ -592,7 +592,7 @@ exports.updateTaskUrl = async (req, res) => {
         }
     }
 
-    // التحقق الأساسي من المدخلات
+    // التحقق الأساسي من المدخلات الخاصة بالرابط
     if (url !== null && url !== undefined && typeof url !== 'string') {
         return res.status(400).json({ message: 'Invalid url type' });
     }
@@ -600,15 +600,42 @@ exports.updateTaskUrl = async (req, res) => {
         return res.status(400).json({ message: 'URL is too long (max 1000 chars)' });
     }
 
+    // تجهيز وصف المهمة (اختياري)
+    let hasDescription = false;
+    let encryptedDescription = null;
+    if (typeof Description !== 'undefined') {
+        hasDescription = true;
+        if (Description && typeof Description === 'string') {
+            try {
+                encryptedDescription = encryptionConfig.encrypt(Description);
+            } catch (e) {
+                return res.status(500).json({ message: 'Error encrypting description' });
+            }
+        } else {
+            encryptedDescription = null;
+        }
+    }
+
     try {
-        await pool.request()
+        const request = pool.request()
             .input('TaskID', sql.Int, id)
             .input('URL', sql.NVarChar, url || null)
-            .query('UPDATE Tasks SET URL = @URL WHERE TaskID = @TaskID');
-        res.status(200).json({ message: 'Task URL updated successfully' });
+            .input('HasDescription', sql.Bit, hasDescription ? 1 : 0)
+            .input('Description', sql.NVarChar, encryptedDescription);
+
+        const updateQuery = `
+            UPDATE Tasks
+            SET
+              URL = @URL,
+              Description = CASE WHEN @HasDescription = 1 THEN @Description ELSE Description END
+            WHERE TaskID = @TaskID
+        `;
+
+        await request.query(updateQuery);
+        res.status(200).json({ message: 'Task updated successfully' });
     } catch (error) {
         console.error('UPDATE TASK URL ERROR:', error);
-        res.status(500).send({ message: 'Error updating task URL' });
+        res.status(500).send({ message: 'Error updating task URL/description' });
     }
 };
 
@@ -622,7 +649,7 @@ exports.getTasksWithNotifications = async (req, res) => {
     }
     
     try {
-        // استخدام الدالة المحدثة التي تدعم التفويض
+        // استخدام الدالة المحدثة التي تدعم التفويض (تجلب المهام غير المكتملة فقط)
         const baseQuery = await getTasksQueryWithDelegation(userId, isAdmin === 'true');
 
         // تعديل الاستعلام لإضافة معلومات الإشعارات مع الحفاظ على ActedByName
@@ -742,5 +769,225 @@ exports.updateTaskCategory = async (req, res) => {
     } catch (error) {
         console.error('UPDATE TASK CATEGORY ERROR:', error);
         res.status(500).json({ message: 'خطأ في تحديث تصنيف المهمة' });
+    }
+};
+
+// الحصول على المهام المكتملة للمستخدم (عند الحاجة فقط، مع دعم التصفح على دفعات)
+exports.getCompletedTasks = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { userId, isAdmin } = req.query;
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
+
+    // إعداد معلومات التصفح (الصفحة والحجم)
+    let { page = 1, pageSize = 10 } = req.query;
+    page = parseInt(page, 10) || 1;
+    pageSize = parseInt(pageSize, 10) || 10;
+    if (page < 1) page = 1;
+    if (pageSize < 1) pageSize = 10;
+    if (pageSize > 100) pageSize = 100;
+    const offset = (page - 1) * pageSize;
+
+    try {
+        let query;
+
+        if (isAdmin === 'true') {
+            // المدير يرى جميع المهام المكتملة/الملغاة
+            query = `
+                SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName
+                FROM Tasks t
+                LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+                LEFT JOIN Users acted ON t.ActedBy = acted.UserID
+                LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
+                WHERE t.Status IN ('completed', 'cancelled')
+                ORDER BY t.CreatedAt DESC
+                OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
+            `;
+        } else {
+            // المستخدم العادي: المهام المكتملة/الملغاة التي أنشأها أو لديه فيها مهام فرعية
+            query = `
+                SELECT DISTINCT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName
+                FROM Tasks t
+                LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+                LEFT JOIN Users acted ON t.ActedBy = acted.UserID
+                LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
+                WHERE t.Status IN ('completed', 'cancelled')
+                  AND (
+                    t.CreatedBy = '${userId}'
+                    OR EXISTS (
+                        SELECT 1 FROM Subtasks s 
+                        WHERE s.TaskID = t.TaskID AND s.AssignedTo = '${userId}'
+                    )
+                  )
+                ORDER BY t.CreatedAt DESC
+                OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
+            `;
+        }
+
+        const request = pool.request();
+        const result = await request.query(query);
+        const tasks = result.recordset.map(t => {
+            if (t.Description) {
+                try { t.Description = encryptionConfig.decrypt(t.Description); } catch (e) {}
+            }
+            if (t.Title) {
+                try { t.Title = encryptionConfig.decrypt(t.Title); } catch (e) {}
+            }
+            return t;
+        });
+
+        res.status(200).json(tasks);
+    } catch (error) {
+        console.error('DATABASE GET COMPLETED TASKS ERROR:', error);
+        res.status(500).send({ message: 'Error fetching completed tasks' });
+    }
+};
+
+// البحث في المهام المكتملة في قاعدة البيانات (العنوان، التفاصيل، المهام الفرعية، التعليقات)
+exports.searchCompletedTasks = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { userId, isAdmin, q } = req.query;
+
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
+    if (!q || !q.trim()) {
+        return res.status(400).json({ message: 'Search query (q) is required.' });
+    }
+
+    const searchTerm = q.toLowerCase();
+
+    try {
+        let tasksQuery;
+
+        if (isAdmin === 'true') {
+            tasksQuery = `
+                SELECT t.*, 
+                       creator.FullName as CreatedByName, 
+                       acted.FullName as ActedByName, 
+                       assignee.FullName as AssignedToName,
+                       c.Name as CategoryName
+                FROM Tasks t
+                LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+                LEFT JOIN Users acted ON t.ActedBy = acted.UserID
+                LEFT JOIN Users assignee ON t.AssignedTo = assignee.UserID
+                LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
+                WHERE t.Status IN ('completed', 'cancelled')
+                ORDER BY t.CreatedAt DESC
+            `;
+        } else {
+            tasksQuery = `
+                SELECT DISTINCT t.*, 
+                       creator.FullName as CreatedByName, 
+                       acted.FullName as ActedByName, 
+                       assignee.FullName as AssignedToName,
+                       c.Name as CategoryName
+                FROM Tasks t
+                LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+                LEFT JOIN Users acted ON t.ActedBy = acted.UserID
+                LEFT JOIN Users assignee ON t.AssignedTo = assignee.UserID
+                LEFT JOIN Categories c ON t.CategoryID = c.CategoryID
+                WHERE t.Status IN ('completed', 'cancelled')
+                  AND (
+                    t.CreatedBy = '${userId}'
+                    OR EXISTS (
+                        SELECT 1 FROM Subtasks s 
+                        WHERE s.TaskID = t.TaskID AND s.AssignedTo = '${userId}'
+                    )
+                  )
+                ORDER BY t.CreatedAt DESC
+            `;
+        }
+
+        const tasksResult = await pool.request().query(tasksQuery);
+        let tasks = tasksResult.recordset.map(t => {
+            if (t.Description) {
+                try { t.Description = encryptionConfig.decrypt(t.Description); } catch (e) {}
+            }
+            if (t.Title) {
+                try { t.Title = encryptionConfig.decrypt(t.Title); } catch (e) {}
+            }
+            return t;
+        });
+
+        if (tasks.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        const taskIds = tasks.map(t => t.TaskID);
+        const idsList = taskIds.join(',');
+
+        let subtasksByTaskId = {};
+        let commentsByTaskId = {};
+
+        // جلب المهام الفرعية لكل المهام المكتملة
+        const subtasksResult = await pool.request().query(`
+            SELECT s.*, 
+                   u.FullName as AssignedToName,
+                   creator.FullName as CreatedByName
+            FROM Subtasks s 
+            LEFT JOIN Users u ON s.AssignedTo = u.UserID 
+            LEFT JOIN Users creator ON s.CreatedBy = creator.UserID
+            WHERE s.TaskID IN (${idsList})
+            ORDER BY s.CreatedAt DESC
+        `);
+        subtasksByTaskId = subtasksResult.recordset.reduce((acc, s) => {
+            if (s.Title) {
+                try { s.Title = encryptionConfig.decrypt(s.Title); } catch (_) {}
+            }
+            if (!acc[s.TaskID]) acc[s.TaskID] = [];
+            acc[s.TaskID].push(s);
+            return acc;
+        }, {});
+
+        // جلب التعليقات لكل المهام المكتملة
+        const commentsResult = await pool.request().query(`
+            SELECT c.*, u.FullName as UserName 
+            FROM Comments c 
+            LEFT JOIN Users u ON c.UserID = u.UserID 
+            WHERE c.TaskID IN (${idsList})
+            ORDER BY c.CreatedAt DESC
+        `);
+        commentsByTaskId = commentsResult.recordset.reduce((acc, c) => {
+            if (c.Content) {
+                try { c.Content = encryptionConfig.decrypt(c.Content); } catch (e) {}
+            }
+            if (!acc[c.TaskID]) acc[c.TaskID] = [];
+            acc[c.TaskID].push(c);
+            return acc;
+        }, {});
+
+        const filteredTasks = tasks
+            .map(t => {
+                const taskSubtasks = subtasksByTaskId[t.TaskID] || [];
+                const taskComments = commentsByTaskId[t.TaskID] || [];
+
+                const matchesSearch =
+                    (t.Title && t.Title.toLowerCase().includes(searchTerm)) ||
+                    (t.Description && t.Description.toLowerCase().includes(searchTerm)) ||
+                    (t.CreatedByName && t.CreatedByName.toLowerCase().includes(searchTerm)) ||
+                    (t.AssignedToName && t.AssignedToName.toLowerCase().includes(searchTerm)) ||
+                    (taskSubtasks.length > 0 &&
+                        taskSubtasks.some(st => st.Title && st.Title.toLowerCase().includes(searchTerm))) ||
+                    (taskComments.length > 0 &&
+                        taskComments.some(c => c.Content && c.Content.toLowerCase().includes(searchTerm)));
+
+                if (!matchesSearch) {
+                    return null;
+                }
+
+                return {
+                    ...t,
+                    subtasks: taskSubtasks,
+                    comments: taskComments
+                };
+            })
+            .filter(t => t !== null);
+
+        res.status(200).json(filteredTasks);
+    } catch (error) {
+        console.error('DATABASE SEARCH COMPLETED TASKS ERROR:', error);
+        res.status(500).send({ message: 'Error searching completed tasks' });
     }
 };

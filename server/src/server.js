@@ -6,7 +6,7 @@ const sql = require('mssql');
 const cors = require('cors');
 
 const app = express();
-const port = process.env.PORT || 5002;
+const port = process.env.PORT || 5001;
 
 // --- Middlewares ---
 app.use(cors());
@@ -52,6 +52,7 @@ const calendarRoutes = require('./routes/calendarRoutes');
 const delegationRoutes = require('./routes/delegationRoutes');
 const {
   ensureSubtasksCalendarFlag,
+  ensureCommentsCalendarFlag,
   ensurePersonalEventsTable,
   ensureActedByColumns,
   ensureDelegationPasswordHashInUsers,
@@ -59,7 +60,7 @@ const {
   ensureTaskDelegationsTable,
   ensureTaskDelegationPermissionsTable,
   ensureCheckTaskDelegationPermissionFunction,
-  ensureTaskUrlColumn,
+  ensureTaskUrlColumn
 } = require('./utils/dbMigrations');
 
 
@@ -95,9 +96,10 @@ const startServer = async () => {
     
     console.log('✅ Connected to SQL Server successfully!');
 
-    // --- تشغيل ترحيل آمن لضمان عمود ShowInCalendar ---
+    // --- تشغيل ترحيل آمن لضمان أعمدة ShowInCalendar ---
     try {
       await ensureSubtasksCalendarFlag(pool);
+      await ensureCommentsCalendarFlag(pool);
     } catch (migrationErr) {
       console.error('⚠️ Database migration (ShowInCalendar) failed. Server continues running.', migrationErr);
     }

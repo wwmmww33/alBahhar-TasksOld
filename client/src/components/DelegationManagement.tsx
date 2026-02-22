@@ -40,6 +40,8 @@ const DelegationManagement = () => {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [transferToUserId, setTransferToUserId] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -227,6 +229,55 @@ const DelegationManagement = () => {
     return new Date(endDate) < new Date();
   };
 
+  const handleTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferToUserId) {
+      setError('يجب اختيار المستخدم البديل.');
+      return;
+    }
+
+    const storedUser = localStorage.getItem('albahar-user');
+    const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+    const currentUserId = parsedUser?.UserID || '';
+
+    if (!currentUserId) {
+      setError('تعذر تحديد المستخدم الحالي.');
+      return;
+    }
+
+    if (currentUserId === transferToUserId) {
+      setError('لا يمكن أن يكون المستخدم المنتقل هو نفسه المستخدم البديل.');
+      return;
+    }
+    const confirmed = window.confirm('سيتم استبدال جميع الإشارات للمستخدم القديم بالمستخدم الجديد في عدة جداول. هل أنت متأكد؟');
+    if (!confirmed) return;
+
+    try {
+      setIsTransferring(true);
+      setError(null);
+      const response = await fetch('/api/delegations/transfer-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'user-id': currentUserId
+        },
+        body: JSON.stringify({
+          ToUserID: transferToUserId
+        })
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'فشل في تنفيذ عملية الاستبدال');
+      }
+      setTransferToUserId('');
+      alert('تم تنفيذ عملية الاستبدال بنجاح.');
+    } catch (err: any) {
+      setError(err.message || 'حدث خطأ أثناء تنفيذ عملية الاستبدال');
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {error && (
@@ -411,6 +462,45 @@ const DelegationManagement = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow border">
+        <div className="px-4 py-3 border-b border-content/10 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-content">نقل المهام لشخص آخر</h3>
+            <p className="text-xs text-content-secondary mt-1">
+              استخدم هذه الأداة عند انتقالك من القسم أو تسليم مهامك لشخص آخر.
+            </p>
+          </div>
+        </div>
+        <form onSubmit={handleTransfer} className="px-4 py-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-content mb-1">
+              المستخدم البديل
+            </label>
+            <select
+              value={transferToUserId}
+              onChange={(e) => setTransferToUserId(e.target.value)}
+              className="w-full p-2 border rounded-md bg-bkg border-content/20 text-content focus:outline-none focus:ring-2 focus:ring-primary/60"
+            >
+              <option value="">-- اختر المستخدم البديل --</option>
+              {users.map(user => (
+                <option key={user.UserID} value={user.UserID}>
+                  {user.FullName} ({user.DepartmentName || 'بدون قسم'}) - {user.UserID}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-2 items-stretch md:items-end">
+            <button
+              type="submit"
+              disabled={isTransferring}
+              className="inline-flex justify-center items-center bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isTransferring ? 'جاري التنفيذ...' : 'نقل المهام للمستخدم البديل'}
+            </button>
+          </div>
+        </form>
       </div>
 
       {/* نموذج التعديل */}

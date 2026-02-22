@@ -5,11 +5,17 @@ const taskController = require('../controllers/taskController');
 
 // --- الترتيب الصحيح للمسارات ---
 
-// GET /api/tasks (للحصول على كل المهام)
+// GET /api/tasks (للحصول على كل المهام غير المكتملة)
 router.get('/', taskController.getAllTasks);
 
-// GET /api/tasks/with-notifications (للحصول على المهام مع الإشعارات)
+// GET /api/tasks/with-notifications (للحصول على المهام مع الإشعارات - غير المكتملة فقط)
 router.get('/with-notifications', taskController.getTasksWithNotifications);
+
+// GET /api/tasks/completed (للحصول على المهام المكتملة/الملغاة عند الحاجة)
+router.get('/completed', taskController.getCompletedTasks);
+
+// GET /api/tasks/completed/search (للبحث في المهام المكتملة/الملغاة في قاعدة البيانات)
+router.get('/completed/search', taskController.searchCompletedTasks);
 
 // GET /api/tasks/assignment-notifications (للحصول على إشعارات الإسناد)
 router.get('/assignment-notifications', taskController.getAssignmentNotifications);

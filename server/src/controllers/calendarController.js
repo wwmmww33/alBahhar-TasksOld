@@ -2,10 +2,9 @@
 const sql = require('mssql');
 const encryptionConfig = require('../config/encryption.config');
 
-// يعيد المهام الفرعية المُحددة للعرض في التقويم لقسم المستخدم، مرتبة حسب أقرب تاريخ استحقاق
 exports.getDepartmentCalendarSubtasks = async (req, res) => {
   const pool = req.app.locals.db;
-  const { userId, limit, startDate, days } = req.query;
+  const { userId, limit, startDate, days, includePast } = req.query;
 
   if (!userId) {
     return res.status(400).json({ message: 'userId is required' });
@@ -20,8 +19,8 @@ exports.getDepartmentCalendarSubtasks = async (req, res) => {
     const userHasDept = !(userRes.recordset.length === 0 || userRes.recordset[0].DepartmentID == null);
     const departmentId = userHasDept ? userRes.recordset[0].DepartmentID : null;
     const safeLimit = Number.isInteger(parseInt(limit)) ? parseInt(limit) : 20;
+    const includePastFlag = typeof includePast === 'string' && includePast.toLowerCase() === 'true';
 
-    // إعداد نطاق التاريخ إذا تم طلبه
     let useRange = false;
     let startDateParam = null;
     let endDateParam = null;
@@ -29,11 +28,17 @@ exports.getDepartmentCalendarSubtasks = async (req, res) => {
     if (startDate || daysInt > 0) {
       useRange = true;
       const base = startDate ? new Date(startDate) : new Date();
-      // تطبيع إلى تاريخ فقط
       startDateParam = new Date(base.getFullYear(), base.getMonth(), base.getDate());
       const endBase = new Date(startDateParam);
       endBase.setDate(endBase.getDate() + (daysInt > 0 ? daysInt : 30));
       endDateParam = endBase;
+      if (!includePastFlag) {
+        const today = new Date();
+        const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        if (startDateParam < currentMonthStart) {
+          startDateParam = currentMonthStart;
+        }
+      }
     }
 
     // التحقق من وجود العمود ShowInCalendar قبل الاستعلام
@@ -213,19 +218,18 @@ exports.getDepartmentCalendarSubtasks = async (req, res) => {
   }
 };
 
-// جلب الأحداث الخاصة للمستخدم نفسه فقط ضمن نطاق تاريخ محدد
 exports.getPersonalEvents = async (req, res) => {
   const pool = req.app.locals.db;
-  const { userId, startDate, days } = req.query;
+  const { userId, startDate, days, includePast } = req.query;
   if (!userId) {
     return res.status(400).json({ message: 'userId is required' });
   }
   try {
-    // إعداد نطاق التاريخ
     let useRange = false;
     let startDateParam = null;
     let endDateParam = null;
     const daysInt = Number.isInteger(parseInt(days)) ? parseInt(days) : 0;
+    const includePastFlag = typeof includePast === 'string' && includePast.toLowerCase() === 'true';
     if (startDate || daysInt > 0) {
       useRange = true;
       const base = startDate ? new Date(startDate) : new Date();
@@ -233,6 +237,13 @@ exports.getPersonalEvents = async (req, res) => {
       const endBase = new Date(startDateParam);
       endBase.setDate(endBase.getDate() + (daysInt > 0 ? daysInt : 30));
       endDateParam = endBase;
+      if (!includePastFlag) {
+        const today = new Date();
+        const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        if (startDateParam < currentMonthStart) {
+          startDateParam = currentMonthStart;
+        }
+      }
     }
 
     // التحقق من وجود الجدول
@@ -279,7 +290,6 @@ exports.getPersonalEvents = async (req, res) => {
   }
 };
 
-// إنشاء حدث خاص جديد للمستخدم
 exports.createPersonalEvent = async (req, res) => {
   const pool = req.app.locals.db;
   const { userId, title, eventDate } = req.body;
@@ -317,5 +327,101 @@ exports.createPersonalEvent = async (req, res) => {
   } catch (err) {
     console.error('Error creating personal event:', err);
     return res.status(500).json({ message: 'Error creating personal event' });
+  }
+};
+
+exports.getCalendarComments = async (req, res) => {
+  const pool = req.app.locals.db;
+  const { userId, startDate, days, includePast, includeAllComments } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ message: 'userId is required' });
+  }
+
+  try {
+    let useRange = false;
+    let startDateParam = null;
+    let endDateParam = null;
+    const daysInt = Number.isInteger(parseInt(days)) ? parseInt(days) : 0;
+    const includePastFlag = typeof includePast === 'string' && includePast.toLowerCase() === 'true';
+    if (startDate || daysInt > 0) {
+      useRange = true;
+      const base = startDate ? new Date(startDate) : new Date();
+      startDateParam = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      const endBase = new Date(startDateParam);
+      endBase.setDate(endBase.getDate() + (daysInt > 0 ? daysInt : 30));
+      endDateParam = endBase;
+      if (!includePastFlag) {
+        const today = new Date();
+        const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        if (startDateParam < currentMonthStart) {
+          startDateParam = currentMonthStart;
+        }
+      }
+    }
+
+    const colCheck = await pool.request().query(`
+      SELECT COL_LENGTH('dbo.Comments', 'ShowInCalendar') AS Len
+    `);
+    if (!colCheck.recordset[0].Len) {
+      return res.status(200).json([]);
+    }
+
+    const includeAllFlag = typeof includeAllComments === 'string' && includeAllComments.toLowerCase() === 'true';
+    const request = pool.request()
+      .input('UserID', sql.NVarChar, userId)
+      .input('IncludeAllComments', sql.Bit, includeAllFlag ? 1 : 0);
+    let query;
+    if (useRange) {
+      request.input('StartDate', sql.Date, startDateParam).input('EndDate', sql.Date, endDateParam);
+      query = `
+        SELECT
+          c.CommentID,
+          c.TaskID,
+          c.UserID,
+          c.Content,
+          c.CreatedAt,
+          t.Title as TaskTitle
+        FROM Comments c
+        INNER JOIN Tasks t ON c.TaskID = t.TaskID
+        WHERE (@IncludeAllComments = 1 OR c.ShowInCalendar = 1)
+          AND c.UserID = @UserID
+          AND CAST(c.CreatedAt AS DATE) >= @StartDate
+          AND CAST(c.CreatedAt AS DATE) < @EndDate
+        ORDER BY c.CreatedAt ASC, c.CommentID ASC
+      `;
+    } else {
+      query = `
+        SELECT
+          c.CommentID,
+          c.TaskID,
+          c.UserID,
+          c.Content,
+          c.CreatedAt,
+          t.Title as TaskTitle
+        FROM Comments c
+        INNER JOIN Tasks t ON c.TaskID = t.TaskID
+        WHERE (@IncludeAllComments = 1 OR c.ShowInCalendar = 1)
+          AND c.UserID = @UserID
+          AND CAST(c.CreatedAt AS DATE) >= CAST(GETDATE() AS DATE)
+        ORDER BY c.CreatedAt ASC, c.CommentID ASC
+      `;
+    }
+
+    const result = await request.query(query);
+    const decrypted = result.recordset.map((r) => {
+      try {
+        if (r.Content) r.Content = encryptionConfig.decrypt(r.Content);
+      } catch (_) {}
+      try {
+        if (r.TaskTitle) r.TaskTitle = encryptionConfig.decrypt(r.TaskTitle);
+      } catch (_) {}
+      return r;
+    });
+
+    return res.status(200).json(decrypted);
+  } catch (err) {
+    console.error('Error fetching calendar comments:', err);
+    return res.status(500).json({ message: 'Error fetching calendar comments' });
   }
 };

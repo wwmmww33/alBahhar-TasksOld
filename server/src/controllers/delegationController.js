@@ -309,10 +309,10 @@ exports.getDelegationSecretForDelegation = async (req, res) => {
   const pool = req.app.locals.db;
   const currentUserId = getCurrentUserId(req);
   const { id } = req.params;
-
+ 
   if (!pool) return res.status(503).json({ message: 'Database connection is not available.' });
   if (!currentUserId) return res.status(400).json({ message: 'user-id header is required.' });
-
+ 
   try {
     const check = await pool.request()
       .input('DelegationID', sql.Int, parseInt(id))
@@ -320,11 +320,112 @@ exports.getDelegationSecretForDelegation = async (req, res) => {
     if (!check.recordset.length) return res.status(404).json({ message: 'Delegation not found' });
     if (check.recordset[0].DelegatorUserID !== currentUserId)
       return res.status(403).json({ message: 'لا تملك صلاحية قراءة سر هذا التفويض' });
-
+ 
     const secret = check.recordset[0].DelegationSecretHash || null;
     res.status(200).json({ DelegationSecretHash: secret, isSet: !!secret });
   } catch (err) {
     console.error('GET DELEGATION SECRET (BY DELEGATION) ERROR:', err);
     res.status(500).json({ message: 'Error fetching delegation secret for delegation' });
+  }
+};
+
+exports.transferUserData = async (req, res) => {
+  const pool = req.app.locals.db;
+  const currentUserId = getCurrentUserId(req);
+  const { ToUserID } = req.body || {};
+
+  if (!pool) return res.status(503).json({ message: 'Database connection is not available.' });
+  if (!currentUserId) return res.status(400).json({ message: 'user-id header is required.' });
+  if (!ToUserID) return res.status(400).json({ message: 'ToUserID is required.' });
+  if (currentUserId === ToUserID) return res.status(400).json({ message: 'لا يمكن أن يكون المعرفان متطابقين.' });
+
+  let transaction;
+
+  try {
+    const usersCheck = await pool.request()
+      .input('FromUserID', sql.NVarChar, currentUserId)
+      .input('ToUserID', sql.NVarChar, ToUserID)
+      .query(`
+        SELECT UserID, IsActive
+        FROM Users
+        WHERE UserID IN (@FromUserID, @ToUserID)
+      `);
+
+    const foundIds = new Set(usersCheck.recordset.map(r => r.UserID));
+    if (!foundIds.has(currentUserId)) {
+      return res.status(400).json({ message: 'المستخدم المراد استبداله غير موجود.' });
+    }
+    if (!foundIds.has(ToUserID)) {
+      return res.status(400).json({ message: 'المستخدم البديل غير موجود.' });
+    }
+
+    const toUser = usersCheck.recordset.find(u => u.UserID === ToUserID);
+    if (!toUser || !toUser.IsActive) {
+      return res.status(400).json({ message: 'المستخدم البديل غير نشط.' });
+    }
+
+    const mappings = [
+      { table: 'Categories', column: 'CreatedBy' },
+      { table: 'CategoryInformation', column: 'CreatedBy' },
+      { table: 'CommentNotifications', column: 'CommentedByUserID' },
+      { table: 'CommentNotifications', column: 'NotifyUserID' },
+      { table: 'Comments', column: 'UserID' },
+      { table: 'Comments', column: 'ActedBy' },
+      { table: 'Procedures', column: 'CreatedBy' },
+      { table: 'ProcedureSubtasks', column: 'VacancyID' },
+      { table: 'ProcedureSubtasks', column: 'AssignmentID' },
+      { table: 'Subtasks', column: 'CreatedBy' },
+      { table: 'Subtasks', column: 'AssignedTo' },
+      { table: 'Subtasks', column: 'ActedBy' },
+      { table: 'TaskAssignmentNotifications', column: 'AssignedToUserID' },
+      { table: 'TaskAssignmentNotifications', column: 'AssignedByUserID' },
+      { table: 'Tasks', column: 'CreatedBy' },
+      { table: 'Tasks', column: 'ActedBy' }
+    ];
+
+    const tableNames = Array.from(new Set(mappings.map(m => `'${m.table}'`))).join(',');
+    const columnNames = Array.from(new Set(mappings.map(m => `'${m.column}'`))).join(',');
+
+    const metaResult = await pool.request().query(`
+      SELECT TABLE_NAME, COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo'
+        AND TABLE_NAME IN (${tableNames})
+        AND COLUMN_NAME IN (${columnNames})
+    `);
+
+    const existing = new Set(
+      metaResult.recordset.map(r => `${r.TABLE_NAME}.${r.COLUMN_NAME}`)
+    );
+
+    const updateStatements = mappings
+      .filter(m => existing.has(`${m.table}.${m.column}`))
+      .map(m => `UPDATE ${m.table} SET ${m.column} = @NewUserID WHERE ${m.column} = @OldUserID`);
+
+    if (updateStatements.length === 0) {
+      return res.status(400).json({ message: 'لم يتم العثور على أي أعمدة مرتبطة بالمستخدم الحالي لنقلها.' });
+    }
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    const request = new sql.Request(transaction);
+    request.input('OldUserID', sql.NVarChar, currentUserId);
+    request.input('NewUserID', sql.NVarChar, ToUserID);
+
+    const updateSql = updateStatements.join(';\n') + ';';
+
+    await request.query(updateSql);
+    await transaction.commit();
+
+    res.status(200).json({ message: 'تم استبدال المعرف في جميع الجداول المحددة بنجاح.' });
+  } catch (err) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (_) {}
+    }
+    console.error('TRANSFER USER DATA ERROR:', err);
+    res.status(500).json({ message: 'خطأ أثناء استبدال المعرفات.', details: err.message });
   }
 };

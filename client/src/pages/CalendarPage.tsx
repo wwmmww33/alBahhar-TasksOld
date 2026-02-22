@@ -1,0 +1,593 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import type { CurrentUser } from '../types';
+
+type CalendarItem = {
+  SubtaskID: number;
+  TaskID: number;
+  SubtaskTitle: string;
+  TaskTitle: string;
+  DueDate: string;
+  AssignedToName?: string;
+};
+
+type PersonalEventItem = {
+  EventID: number;
+  Title: string;
+  EventDate: string;
+};
+
+type CalendarCommentItem = {
+  CommentID: number;
+  TaskID: number;
+  TaskTitle: string;
+  Content: string;
+  CreatedAt: string;
+  CommentedByName?: string;
+};
+
+type ViewMode = 'month' | 'week' | 'day';
+type ViewFilter = 'both' | 'shared' | 'personal';
+type ViewLayout = 'list' | 'grid';
+
+type CalendarPageProps = {
+  currentUser: CurrentUser;
+};
+
+const CalendarPage = ({ currentUser }: CalendarPageProps) => {
+  const [items, setItems] = useState<CalendarItem[]>([]);
+  const [personalEvents, setPersonalEvents] = useState<PersonalEventItem[]>([]);
+  const [commentEvents, setCommentEvents] = useState<CalendarCommentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('month');
+  const [viewFilter, setViewFilter] = useState<ViewFilter>('both');
+  const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [viewLayout, setViewLayout] = useState<ViewLayout>('grid');
+
+  const openTaskInNewTab = (taskId: number) => {
+    window.open(`/task/${taskId}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const toLocalYMD = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+
+  const computeRange = (mode: ViewMode, ref: Date) => {
+    const base = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+    if (mode === 'day') {
+      const start = base;
+      return { start, days: 1 };
+    }
+    if (mode === 'week') {
+      const start = new Date(base);
+      const dayIndex = start.getDay();
+      start.setDate(start.getDate() - dayIndex);
+      return { start, days: 7 };
+    }
+    const start = new Date(base.getFullYear(), base.getMonth(), 1);
+    const end = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+    const diffMs = end.getTime() - start.getTime();
+    const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    return { start, days };
+  };
+
+  useEffect(() => {
+    const fetchCalendar = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { start, days } = computeRange(viewMode, currentDate);
+        const startStr = toLocalYMD(start);
+        const now = new Date();
+        const isPastMonth =
+          currentDate.getFullYear() < now.getFullYear() ||
+          (currentDate.getFullYear() === now.getFullYear() &&
+            currentDate.getMonth() < now.getMonth());
+        const params = new URLSearchParams({
+          userId: String(currentUser.UserID),
+          startDate: startStr,
+          days: String(days),
+        });
+        if (isPastMonth) {
+          params.append('includePast', 'true');
+        }
+
+        const subtasksRes = await fetch(`/api/calendar/subtasks?${params.toString()}`);
+        if (!subtasksRes.ok) {
+          throw new Error(`Calendar subtasks fetch failed: ${subtasksRes.status}`);
+        }
+        const subtasksCt = subtasksRes.headers.get('content-type') || '';
+        let subtasksData: any = [];
+        try {
+          subtasksData = subtasksCt.includes('application/json') ? await subtasksRes.json() : [];
+        } catch (_) {
+          subtasksData = [];
+        }
+        setItems(Array.isArray(subtasksData) ? subtasksData : []);
+
+        try {
+          const personalRes = await fetch(
+            `/api/calendar/personal-events?${params.toString()}`
+          );
+          if (personalRes.ok) {
+            const pct = personalRes.headers.get('content-type') || '';
+            const personalData = pct.includes('application/json') ? await personalRes.json() : [];
+            setPersonalEvents(Array.isArray(personalData) ? personalData : []);
+          } else {
+            setPersonalEvents([]);
+          }
+        } catch (_) {
+          setPersonalEvents([]);
+        }
+
+        try {
+          const commentsRes = await fetch(
+            `/api/calendar/comments?${params.toString()}`
+          );
+          if (commentsRes.ok) {
+            const cct = commentsRes.headers.get('content-type') || '';
+            const commentsData = cct.includes('application/json') ? await commentsRes.json() : [];
+            setCommentEvents(Array.isArray(commentsData) ? commentsData : []);
+          } else {
+            setCommentEvents([]);
+          }
+        } catch (_) {
+          setCommentEvents([]);
+        }
+      } catch (err: any) {
+        setItems([]);
+        setPersonalEvents([]);
+        setCommentEvents([]);
+        setError(err?.message || 'حدث خطأ أثناء جلب بيانات التقويم.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchCalendar();
+  }, [currentUser.UserID, viewMode, currentDate]);
+
+  const dateRange = useMemo(() => {
+    const { start, days } = computeRange(viewMode, currentDate);
+    const daysArr: { key: string; date: Date; label: string }[] = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const key = toLocalYMD(d);
+      const label = d.toLocaleDateString('ar-EG', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      });
+      daysArr.push({ key, date: d, label });
+    }
+    return daysArr;
+  }, [viewMode, currentDate]);
+
+  const itemsByDay = useMemo(() => {
+    const map: Record<string, CalendarItem[]> = {};
+    for (const it of items) {
+      const d = new Date(it.DueDate);
+      const key = toLocalYMD(d);
+      if (!map[key]) map[key] = [];
+      map[key].push(it);
+    }
+    return map;
+  }, [items]);
+
+  const personalByDay = useMemo(() => {
+    const map: Record<string, PersonalEventItem[]> = {};
+    for (const ev of personalEvents) {
+      const d = new Date(ev.EventDate);
+      const key = toLocalYMD(d);
+      if (!map[key]) map[key] = [];
+      map[key].push(ev);
+    }
+    return map;
+  }, [personalEvents]);
+
+  const commentsByDay = useMemo(() => {
+    const map: Record<string, CalendarCommentItem[]> = {};
+    for (const comment of commentEvents) {
+      const d = new Date(comment.CreatedAt);
+      const key = toLocalYMD(d);
+      if (!map[key]) map[key] = [];
+      map[key].push(comment);
+    }
+    return map;
+  }, [commentEvents]);
+
+  const handlePrev = () => {
+    setCurrentDate((prev) => {
+      const d = new Date(prev.getFullYear(), prev.getMonth(), prev.getDate());
+      if (viewMode === 'day') {
+        d.setDate(d.getDate() - 1);
+      } else if (viewMode === 'week') {
+        d.setDate(d.getDate() - 7);
+      } else {
+        d.setMonth(d.getMonth() - 1);
+      }
+      return d;
+    });
+  };
+
+  const handleNext = () => {
+    setCurrentDate((prev) => {
+      const d = new Date(prev.getFullYear(), prev.getMonth(), prev.getDate());
+      if (viewMode === 'day') {
+        d.setDate(d.getDate() + 1);
+      } else if (viewMode === 'week') {
+        d.setDate(d.getDate() + 7);
+      } else {
+        d.setMonth(d.getMonth() + 1);
+      }
+      return d;
+    });
+  };
+
+  const handleToday = () => {
+    setCurrentDate(new Date());
+  };
+
+  const rangeLabel = useMemo(() => {
+    if (viewMode === 'day') {
+      return currentDate.toLocaleDateString('ar-EG', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+    }
+    const { start, days } = computeRange(viewMode, currentDate);
+    if (viewMode === 'week') {
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + days - 1);
+      const startStr = start.toLocaleDateString('ar-EG', {
+        day: 'numeric',
+        month: 'long',
+      });
+      const endStr = end.toLocaleDateString('ar-EG', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+      return `من ${startStr} إلى ${endStr}`;
+    }
+    return currentDate.toLocaleDateString('ar-EG', {
+      month: 'long',
+      year: 'numeric',
+    });
+  }, [viewMode, currentDate]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <CalendarIcon className="w-7 h-7 text-primary" />
+          <div>
+            <h1 className="text-2xl font-bold">التقويم</h1>
+            <p className="text-sm text-content-secondary">
+              عرض {viewMode === 'month' ? 'شهري' : viewMode === 'week' ? 'أسبوعي' : 'يومي'} للمهام الفرعية والأحداث الخاصة.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setViewMode('month')}
+            className={`px-3 py-1 rounded-md text-sm border ${
+              viewMode === 'month'
+                ? 'bg-primary text-white border-primary'
+                : 'bg-white dark:bg-gray-800 text-content border-content/20'
+            }`}
+          >
+            شهري
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('week')}
+            className={`px-3 py-1 rounded-md text-sm border ${
+              viewMode === 'week'
+                ? 'bg-primary text-white border-primary'
+                : 'bg-white dark:bg-gray-800 text-content border-content/20'
+            }`}
+          >
+            أسبوعي
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('day')}
+            className={`px-3 py-1 rounded-md text-sm border ${
+              viewMode === 'day'
+                ? 'bg-primary text-white border-primary'
+                : 'bg-white dark:bg-gray-800 text-content border-content/20'
+            }`}
+          >
+            يومي
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-content/5 rounded-md p-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handlePrev}
+            className="flex items-center gap-1 px-2 py-1 rounded-md border border-content/20 bg-white dark:bg-gray-800 text-sm"
+          >
+            <ChevronRight className="w-4 h-4" />
+            السابقة
+          </button>
+          <button
+            type="button"
+            onClick={handleToday}
+            className="px-3 py-1 rounded-md bg-primary text-white text-sm"
+          >
+            اليوم
+          </button>
+          <button
+            type="button"
+            onClick={handleNext}
+            className="flex items-center gap-1 px-2 py-1 rounded-md border border-content/20 bg-white dark:bg-gray-800 text-sm"
+          >
+            التالية
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="text-lg font-semibold text-right">{rangeLabel}</div>
+      </div>
+
+      <div className="flex items-center gap-2 justify-end">
+        <span className="text-xs text-content-secondary">عرض الأحداث:</span>
+        <button
+          type="button"
+          onClick={() => setViewFilter('both')}
+          className={`px-2 py-1 text-xs rounded border ${
+            viewFilter === 'both'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white dark:bg-gray-700 text-content border-content/20'
+          }`}
+        >
+          مشترك + خاص
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewFilter('shared')}
+          className={`px-2 py-1 text-xs rounded border ${
+            viewFilter === 'shared'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white dark:bg-gray-700 text-content border-content/20'
+          }`}
+        >
+          مشترك فقط
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewFilter('personal')}
+          className={`px-2 py-1 text-xs rounded border ${
+            viewFilter === 'personal'
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white dark:bg-gray-700 text-content border-content/20'
+          }`}
+        >
+          خاص فقط
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-content-secondary mt-8">جاري تحميل بيانات التقويم...</div>
+      ) : error ? (
+        <div className="text-center text-red-600 mt-8">{error}</div>
+      ) : (
+        <>
+          {viewMode === 'month' && (
+            <div className="flex items-center gap-2 justify-end">
+              <span className="text-xs text-content-secondary">طريقة عرض الشهر:</span>
+              <button
+                type="button"
+                onClick={() => setViewLayout('list')}
+                className={`px-2 py-1 text-xs rounded border ${
+                  viewLayout === 'list'
+                    ? 'bg-primary text-white border-primary'
+                    : 'bg-white dark:bg-gray-700 text-content border-content/20'
+                }`}
+              >
+                قائمة الأيام
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewLayout('grid')}
+                className={`px-2 py-1 text-xs rounded border ${
+                  viewLayout === 'grid'
+                    ? 'bg-primary text-white border-primary'
+                    : 'bg-white dark:bg-gray-700 text-content border-content/20'
+                }`}
+              >
+                شبكة مربعات
+              </button>
+            </div>
+          )}
+
+          {viewMode === 'month' && viewLayout === 'grid' ? (
+            <div className="mt-3 border rounded-lg overflow-hidden">
+              <div className="grid grid-cols-7 bg-content/5 text-xs font-semibold text-center py-2">
+                {['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'].map((label) => (
+                  <div key={label}>{label}</div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 border-t border-content/10">
+                {(() => {
+                  if (dateRange.length === 0) return null;
+                  const firstDate = dateRange[0].date;
+                  const startOffset = firstDate.getDay();
+                  const cells: { key: string; date: Date | null }[] = [];
+                  for (let i = 0; i < startOffset; i++) {
+                    cells.push({ key: `empty-${i}`, date: null });
+                  }
+                  for (const d of dateRange) {
+                    cells.push({ key: d.key, date: d.date });
+                  }
+                  return cells.map((cell, idx) => {
+                    if (!cell.date) {
+                      return (
+                        <div
+                          key={cell.key + idx}
+                          className="h-28 border border-content/10 bg-transparent"
+                        />
+                      );
+                    }
+                    const key = toLocalYMD(cell.date);
+                    const sharedForDay = itemsByDay[key] || [];
+                    const personalForDay = personalByDay[key] || [];
+                    const commentsForDay = commentsByDay[key] || [];
+                    const visibleShared = viewFilter !== 'personal' ? sharedForDay : [];
+                    const visiblePersonal = viewFilter !== 'shared' ? personalForDay : [];
+                    const visibleComments = viewFilter !== 'shared' ? commentsForDay : [];
+                    const hasEvents =
+                      visibleShared.length > 0 ||
+                      visiblePersonal.length > 0 ||
+                      visibleComments.length > 0;
+                    return (
+                      <div
+                        key={cell.key}
+                        className={`h-28 border border-content/10 p-1 flex flex-col ${
+                          hasEvents
+                            ? 'bg-white dark:bg-gray-900'
+                            : 'bg-white/60 dark:bg-gray-900/40'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-semibold">{cell.date.getDate()}</span>
+                          {hasEvents && (
+                            <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+                          )}
+                        </div>
+                        <div className="space-y-0.5 overflow-hidden">
+                          {visibleShared.slice(0, 2).map((item) => (
+                            <button
+                              key={item.SubtaskID}
+                              type="button"
+                              onClick={() => openTaskInNewTab(item.TaskID)}
+                              className="text-[10px] truncate text-right text-blue-800 dark:text-blue-200 hover:underline w-full text-right"
+                            >
+                              {item.SubtaskTitle}
+                              {item.AssignedToName ? ` (${item.AssignedToName})` : ''}
+                            </button>
+                          ))}
+                          {visiblePersonal.slice(0, 1).map((ev) => (
+                            <div key={ev.EventID} className="text-[10px] truncate text-right">
+                              <span className="text-green-800 dark:text-green-200">{ev.Title}</span>
+                            </div>
+                          ))}
+                          {visibleComments.slice(0, 1).map((comment) => (
+                            <button
+                              key={comment.CommentID}
+                              type="button"
+                              onClick={() => openTaskInNewTab(comment.TaskID)}
+                              className="text-[10px] truncate text-right text-purple-800 dark:text-purple-200 hover:underline w-full text-right"
+                            >
+                              {comment.Content}
+                            </button>
+                          ))}
+                          {hasEvents &&
+                            (visibleShared.length > 2 ||
+                              visiblePersonal.length > 1 ||
+                              visibleComments.length > 1) && (
+                              <div className="text-[10px] text-content-secondary text-right">
+                                المزيد...
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 mt-3">
+              {dateRange.map((d) => {
+                const sharedForDay = itemsByDay[d.key] || [];
+                const personalForDay = personalByDay[d.key] || [];
+                const commentsForDay = commentsByDay[d.key] || [];
+                const visibleShared = viewFilter !== 'personal' ? sharedForDay : [];
+                const visiblePersonal = viewFilter !== 'shared' ? personalForDay : [];
+                const visibleComments = viewFilter !== 'shared' ? commentsForDay : [];
+                const hasEvents =
+                  visibleShared.length > 0 ||
+                  visiblePersonal.length > 0 ||
+                  visibleComments.length > 0;
+
+                return (
+                  <div
+                    key={d.key}
+                    className={`border rounded-lg p-3 ${
+                      hasEvents
+                        ? 'bg-white dark:bg-gray-900 border-blue-300 dark:border-blue-700'
+                        : 'bg-white/60 dark:bg-gray-900/40 border-content/10'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-semibold text-right">{d.label}</div>
+                      {!hasEvents && (
+                        <div className="text-xs text-content-secondary">لا توجد أحداث في هذا اليوم.</div>
+                      )}
+                    </div>
+                    {visibleShared.length > 0 && (
+                      <div className="space-y-1 text-right">
+                    {visibleShared.map((item) => (
+                      <div key={item.SubtaskID} className="text-xs">
+                        <button
+                          type="button"
+                          onClick={() => openTaskInNewTab(item.TaskID)}
+                          className="font-semibold text-blue-800 dark:text-blue-200 hover:underline"
+                        >
+                          {item.SubtaskTitle}
+                          {item.AssignedToName ? ` (${item.AssignedToName})` : ''}
+                        </button>
+                        <div className="text-blue-600 dark:text-blue-300">ضمن: {item.TaskTitle}</div>
+                      </div>
+                    ))}
+                      </div>
+                    )}
+                    {visiblePersonal.length > 0 && (
+                      <div className="space-y-1 text-right mt-2">
+                        {visiblePersonal.map((ev) => (
+                          <div key={ev.EventID} className="text-xs">
+                            <span className="font-semibold text-green-800 dark:text-green-200">{ev.Title}</span>
+                            <span className="ml-1 inline-block text-[10px] text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30 px-1 py-[1px] rounded">
+                              (خاص)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {visibleComments.length > 0 && (
+                      <div className="space-y-1 text-right mt-2">
+                        {visibleComments.map((comment) => (
+                          <button
+                            key={comment.CommentID}
+                            type="button"
+                            onClick={() => openTaskInNewTab(comment.TaskID)}
+                            className="text-xs font-semibold text-purple-800 dark:text-purple-200 hover:underline text-right w-full"
+                          >
+                            {comment.Content}
+                            <div className="text-[11px] text-content-secondary">ضمن: {comment.TaskTitle}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+export default CalendarPage;

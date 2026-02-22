@@ -30,6 +30,9 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const [isEditingURL, setIsEditingURL] = useState(false);
   const [urlInput, setUrlInput] = useState<string>('');
   const [isUpdatingURL, setIsUpdatingURL] = useState(false);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionInput, setDescriptionInput] = useState<string>('');
+  const [isUpdatingDescription, setIsUpdatingDescription] = useState(false);
 
   const fetchAllDetails = useCallback(async () => {
     if (!taskId) return;
@@ -128,14 +131,17 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     }
   };
 
-  const handleUpdateTaskURL = async (newUrl: string | null) => {
+  const handleUpdateTaskURL = async (newUrl: string | null, newDescription?: string | null) => {
     if (!task || isUpdatingURL) return;
     setIsUpdatingURL(true);
     try {
       const response = await fetch(getApiUrl(`tasks/${task.TaskID}/url`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: newUrl })
+        body: JSON.stringify({
+          url: newUrl,
+          Description: typeof newDescription !== 'undefined' ? newDescription : undefined
+        })
       });
       if (response.ok) {
         await fetchAllDetails();
@@ -149,6 +155,33 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       setError('حدث خطأ أثناء تحديث الرابط');
     } finally {
       setIsUpdatingURL(false);
+    }
+  };
+
+  const handleUpdateTaskDescription = async (newDescription: string) => {
+    if (!task || isUpdatingDescription) return;
+    setIsUpdatingDescription(true);
+    try {
+      const response = await fetch(getApiUrl(`tasks/${task.TaskID}/url`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: (task as any)?.URL || null,
+          Description: newDescription
+        })
+      });
+      if (response.ok) {
+        await fetchAllDetails();
+        setIsEditingDescription(false);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'فشل في تحديث الوصف');
+      }
+    } catch (error) {
+      console.error('Failed to update task description:', error);
+      setError('حدث خطأ أثناء تحديث الوصف');
+    } finally {
+      setIsUpdatingDescription(false);
     }
   };
 
@@ -174,25 +207,30 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     }
   };
 
-  const handleCommentSubmit = async (commentData: string | { content: string; customDateTime: string | null }) => {
+  const handleCommentSubmit = async (commentData: string | { content: string; customDateTime: string | null; showInCalendar?: boolean }) => {
     setIsSubmittingComment(true);
     try {
         // التعامل مع البيانات القديمة (string) والجديدة (object)
         let content: string;
         let createdAt: string | null = null;
+        let showInCalendar = false;
         
         if (typeof commentData === 'string') {
             content = commentData;
         } else {
             content = commentData.content;
             createdAt = commentData.customDateTime;
+            if (typeof commentData.showInCalendar === 'boolean') {
+              showInCalendar = commentData.showInCalendar;
+            }
         }
         
         const requestBody: any = {
             TaskID: taskId,
             UserID: getActiveUserId(currentUser.UserID),
             ActedBy: currentUser.UserID,
-            Content: content
+            Content: content,
+            ShowInCalendar: showInCalendar
         };
         
         // إضافة التاريخ المخصص إذا تم تمريره
@@ -415,29 +453,108 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
           </div>
         </div>
       </div>
-      <div className="prose dark:prose-invert max-w-none"><p>{task.Description || 'لا يوجد وصف لهذه المهمة.'}</p></div>
-
-      {canCloseTask && (
-        <div className="mt-6 p-4 bg-content/5 rounded-md flex items-center justify-between flex-wrap gap-2">
-            <p className="font-semibold text-content">إجراءات المهمة الرئيسية:</p>
-            <div className="flex gap-2 flex-wrap">
-                <button onClick={() => handleUpdateTaskStatus('approved-in-progress')} disabled={task.Status === 'approved-in-progress'} className="text-sm bg-emerald-500 text-white px-3 py-1 rounded disabled:bg-gray-400">اكمال الاجراءات بعد الاعتماد</button>
-                <button onClick={() => handleUpdateTaskStatus('completed')} disabled={task.Status === 'completed'} className="text-sm bg-green-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إغلاق كمكتملة</button>
-                <button onClick={() => handleUpdateTaskStatus('cancelled')} disabled={task.Status === 'cancelled'} className="text-sm bg-red-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إلغاء المهمة</button>
-                <button onClick={() => handleUpdateTaskStatus('external')} disabled={task.Status === 'external'} className="text-sm bg-orange-500 text-white px-3 py-1 rounded disabled:bg-gray-400">إسناد لجهة خارجية</button>
-                {(task.Status === 'completed' || task.Status === 'cancelled' || task.Status === 'external' || task.Status === 'approved-in-progress') && (<button onClick={() => handleUpdateTaskStatus('open')} className="text-sm bg-gray-500 text-white px-3 py-1 rounded">إعادة الفتح</button>)}
-                {canDeleteTask && (
-                  <button 
-                    onClick={() => setShowDeleteConfirm(true)} 
-                    className="text-sm bg-red-700 text-white px-3 py-1 rounded hover:bg-red-800 transition-colors flex items-center gap-1"
-                  >
-                    <Trash2 size={14} />
-                    حذف نهائياً
-                  </button>
-                )}
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-content mb-2">وصف المهمة</h3>
+        {isEditingDescription ? (
+          <div className="space-y-2">
+            <textarea
+              autoFocus
+              value={descriptionInput}
+              onChange={(e) => setDescriptionInput(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  await handleUpdateTaskDescription(descriptionInput);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setIsEditingDescription(false);
+                  setDescriptionInput(task.Description || '');
+                }
+              }}
+              className="w-full min-h-[120px] p-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-content text-sm whitespace-pre-wrap"
+            />
+            <div className="flex flex-wrap gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => handleUpdateTaskDescription(descriptionInput)}
+                disabled={isUpdatingDescription}
+                className="px-3 py-1 bg-primary text-white rounded-md hover:bg-primary/90 disabled:bg-gray-400 text-sm"
+              >
+                {isUpdatingDescription ? 'جاري الحفظ...' : 'حفظ الوصف'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditingDescription(false);
+                  setDescriptionInput(task.Description || '');
+                }}
+                className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 text-sm"
+              >
+                إلغاء
+              </button>
             </div>
-        </div>
-      )}
+          </div>
+        ) : (
+          <div
+            className="prose dark:prose-invert max-w-none bg-content/5 rounded-md p-3 cursor-text hover:bg-content/10"
+            onClick={() => {
+              setIsEditingDescription(true);
+              setDescriptionInput(task.Description || '');
+            }}
+            title="انقر لتعديل الوصف"
+          >
+            <p className="whitespace-pre-wrap break-words">
+              {task.Description && task.Description.trim().length > 0
+                ? task.Description
+                : 'لا يوجد وصف لهذه المهمة.'}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 p-4 bg-content/5 rounded-md flex items-center justify-between flex-wrap gap-2">
+          <p className="font-semibold text-content">إجراءات المهمة الرئيسية:</p>
+          <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => handleUpdateTaskStatus('external')}
+                disabled={task.Status === 'external'}
+                className="text-sm bg-orange-500 text-white px-3 py-1 rounded disabled:bg-gray-400"
+              >
+                إسناد لجهة خارجية
+              </button>
+              <button
+                onClick={() => handleUpdateTaskStatus('completed')}
+                disabled={task.Status === 'completed'}
+                className="text-sm bg-green-500 text-white px-3 py-1 rounded disabled:bg-gray-400"
+              >
+                إغلاق كمكتملة
+              </button>
+              <button
+                onClick={() => handleUpdateTaskStatus('cancelled')}
+                disabled={task.Status === 'cancelled'}
+                className="text-sm bg-red-500 text-white px-3 py-1 rounded disabled:bg-gray-400"
+              >
+                إلغاء المهمة
+              </button>
+              {(task.Status === 'completed' || task.Status === 'cancelled' || task.Status === 'external' || task.Status === 'approved-in-progress') && (
+                <button
+                  onClick={() => handleUpdateTaskStatus('open')}
+                  className="text-sm bg-gray-500 text-white px-3 py-1 rounded"
+                >
+                  إعادة الفتح
+                </button>
+              )}
+              {canDeleteTask && (
+                <button 
+                  onClick={() => setShowDeleteConfirm(true)} 
+                  className="text-sm bg-red-700 text-white px-3 py-1 rounded hover:bg-red-800 transition-colors flex items-center gap-1"
+                >
+                  <Trash2 size={14} />
+                  حذف نهائياً
+                </button>
+              )}
+          </div>
+      </div>
       
 
       <hr className="my-8 border-content/10" />
@@ -451,6 +568,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
         onSubtaskUpdate={fetchAllDetails}
         onCommentSubmit={handleCommentSubmit}
         isSubmittingComment={isSubmittingComment}
+        onCommentsUpdate={fetchAllDetails}
       />
       
       {/* Delete Confirmation Modal */}

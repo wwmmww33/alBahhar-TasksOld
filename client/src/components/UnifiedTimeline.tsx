@@ -13,6 +13,7 @@ type Comment = {
   CreatedAt: string;
   ActedBy?: string;
   ActedByName?: string;
+  ShowInCalendar?: boolean;
 };
 
 type TimelineItem = {
@@ -30,8 +31,9 @@ type UnifiedTimelineProps = {
   currentUser: CurrentUser;
   task: any;
   onSubtaskUpdate: () => void;
-  onCommentSubmit: (commentData: string | { content: string; customDateTime: string | null }) => Promise<void>;
+  onCommentSubmit: (commentData: string | { content: string; customDateTime: string | null; showInCalendar?: boolean }) => Promise<void>;
   isSubmittingComment: boolean;
+  onCommentsUpdate: () => void;
 };
 
 const UnifiedTimeline = ({
@@ -43,7 +45,8 @@ const UnifiedTimeline = ({
   task,
   onSubtaskUpdate,
   onCommentSubmit,
-  isSubmittingComment
+  isSubmittingComment,
+  onCommentsUpdate
 }: UnifiedTimelineProps) => {
   const { refreshTasks, refreshNotifications } = useNotification();
   const renderWithLinks = (text: string) => {
@@ -96,6 +99,7 @@ const UnifiedTimeline = ({
   const [newComment, setNewComment] = useState('');
   const [useCustomDateTime, setUseCustomDateTime] = useState(false);
   const [customDateTime, setCustomDateTime] = useState(getCurrentDateTime());
+  const [showCommentInCalendar, setShowCommentInCalendar] = useState(false);
   const [showSubtaskForm, setShowSubtaskForm] = useState(false);
   const [showCommentForm, setShowCommentForm] = useState(false);
 
@@ -104,6 +108,8 @@ const UnifiedTimeline = ({
   const [editingTitleValue, setEditingTitleValue] = useState('');
   const [editingDueSubtaskId, setEditingDueSubtaskId] = useState<number | null>(null);
   const [editingDueValue, setEditingDueValue] = useState<string>('');
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [editingCommentValue, setEditingCommentValue] = useState('');
 
   const actingUserId = getActiveUserId(currentUser.UserID);
   const canManageAssignments = currentUser.IsAdmin || (task && actingUserId === task.CreatedBy);
@@ -258,20 +264,10 @@ const UnifiedTimeline = ({
     e.preventDefault();
     if (!newComment.trim() || isSubmittingComment) return;
     
-    // التحقق من صحة التاريخ المخصص إذا تم تفعيله
     if (useCustomDateTime) {
       const selectedDate = new Date(customDateTime);
-      const currentDate = new Date();
-      
-      // التحقق من أن التاريخ صحيح
       if (isNaN(selectedDate.getTime())) {
         alert('يرجى إدخال تاريخ ووقت صحيح');
-        return;
-      }
-      
-      // التحقق من عدم اختيار تاريخ مستقبلي
-      if (selectedDate > currentDate) {
-        alert('لا يمكن اختيار تاريخ مستقبلي للتعليق');
         return;
       }
     }
@@ -279,13 +275,66 @@ const UnifiedTimeline = ({
     // تمرير التاريخ المخصص إذا تم تفعيله
     const commentData = {
       content: newComment,
-      customDateTime: useCustomDateTime ? customDateTime : null
+      customDateTime: useCustomDateTime ? customDateTime : null,
+      showInCalendar: showCommentInCalendar
     };
     
     await onCommentSubmit(commentData);
     setNewComment('');
     // إعادة تعيين التاريخ المخصص للوقت الحالي
     setCustomDateTime(getCurrentDateTime());
+    setShowCommentInCalendar(false);
+  };
+
+  const saveComment = async (commentId: number, content: string) => {
+    try {
+      const resp = await fetch(`/api/comments/${commentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          Content: content,
+          UserID: actingUserId,
+        }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        alert(`فشل حفظ التعديل على التعليق (${resp.status}). ${text}`);
+        return false;
+      }
+      onCommentsUpdate();
+      refreshNotifications();
+      return true;
+    } catch (err) {
+      console.error('Network error while saving comment:', err);
+      alert('تعذر الاتصال بالخادم أثناء حفظ التعليق. تأكد من تشغيل الخادم.');
+      return false;
+    }
+  };
+
+  const handleDeleteComment = async (comment: Comment) => {
+    const canDelete = comment.UserID === actingUserId || comment.ActedBy === actingUserId;
+    if (!canDelete) {
+      alert('ليس لديك الصلاحية لحذف هذا التعليق.');
+      return;
+    }
+    if (!window.confirm('هل أنت متأكد من حذف هذا التعليق؟')) return;
+    try {
+      const resp = await fetch(`/api/comments/${comment.CommentID}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ UserID: actingUserId }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        alert(`فشل حذف التعليق (${resp.status}). ${text}`);
+        return;
+      }
+      onCommentsUpdate();
+      refreshNotifications();
+    } catch (err) {
+      console.error('Network error while deleting comment:', err);
+      alert('تعذر الاتصال بالخادم أثناء حذف التعليق. تأكد من تشغيل الخادم.');
+    }
   };
 
   const renderSubtaskItem = (subtask: Subtask) => {
@@ -479,6 +528,25 @@ const UnifiedTimeline = ({
   };
 
   const renderCommentItem = (comment: Comment) => {
+    const canManage = comment.UserID === actingUserId || comment.ActedBy === actingUserId;
+    const isEditing = editingCommentId === comment.CommentID;
+    const handleToggleCommentCalendar = async (next: boolean) => {
+      try {
+        const resp = await fetch(`/api/comments/${comment.CommentID}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            UserID: actingUserId,
+            ShowInCalendar: next,
+          }),
+        });
+        if (resp.ok) {
+          onCommentsUpdate();
+          window.dispatchEvent(new CustomEvent('calendar:comment:updated', { detail: { CommentID: comment.CommentID, ShowInCalendar: next } }));
+        }
+      } catch (_) {}
+    };
+
     return (
       <div className="flex items-start gap-3">
         <div className="flex-shrink-0 w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mt-1">
@@ -486,15 +554,80 @@ const UnifiedTimeline = ({
         </div>
         <div className="flex-grow">
           <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-            <p className="text-content mb-2 break-words whitespace-pre-wrap">{renderWithLinks(comment.Content)}</p>
+            {isEditing ? (
+              <textarea
+                autoFocus
+                value={editingCommentValue}
+                onChange={(e) => setEditingCommentValue(e.target.value)}
+                onBlur={async () => {
+                  const trimmed = editingCommentValue.trim();
+                  if (trimmed && trimmed !== comment.Content) {
+                    await saveComment(comment.CommentID, trimmed);
+                  }
+                  setEditingCommentId(null);
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const trimmed = editingCommentValue.trim();
+                    if (trimmed && trimmed !== comment.Content) {
+                      await saveComment(comment.CommentID, trimmed);
+                    }
+                    setEditingCommentId(null);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setEditingCommentId(null);
+                  }
+                }}
+                className="w-full p-2 border border-content/20 rounded bg-bkg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 text-sm mb-2"
+                rows={3}
+              />
+            ) : (
+              <p
+                className={`text-content mb-2 break-words whitespace-pre-wrap ${canManage ? 'cursor-text' : ''}`}
+                onClick={() => {
+                  if (!canManage) return;
+                  setEditingCommentId(comment.CommentID);
+                  setEditingCommentValue(comment.Content || '');
+                }}
+                onDoubleClick={() => {
+                  if (!canManage) return;
+                  setEditingCommentId(comment.CommentID);
+                  setEditingCommentValue(comment.Content || '');
+                }}
+                title={canManage ? 'انقر لتعديل هذا التعليق' : undefined}
+              >
+                {renderWithLinks(comment.Content)}
+              </p>
+            )}
             <div className="flex justify-between items-center">
-              <div className="flex flex-col">
+              <div className="flex flex-col gap-1">
                 <p className="text-xs text-content-secondary">
                   المنشيء: {comment.UserName || comment.UserID}
                   {comment.ActedBy ? ` بواسطة (${comment.ActedByName || getUserNameById(comment.ActedBy)})` : ''}
                 </p>
+                {canManage && (
+                  <label className="flex items-center gap-2 text-xs text-content-secondary">
+                    <input
+                      type="checkbox"
+                      checked={!!comment.ShowInCalendar}
+                      onChange={(e) => handleToggleCommentCalendar(e.target.checked)}
+                    />
+                    <span>إظهار هذا التعليق في التقويم</span>
+                  </label>
+                )}
               </div>
-              <p className="text-xs text-content-secondary font-mono">#{comment.CommentID}</p>
+              <div className="flex items-center gap-2">
+                {canManage && (
+                  <button
+                    onClick={() => handleDeleteComment(comment)}
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+                <p className="text-xs text-content-secondary font-mono">#{comment.CommentID}</p>
+              </div>
             </div>
           </div>
           
@@ -640,13 +773,24 @@ const UnifiedTimeline = ({
                     value={customDateTime}
                     onChange={(e) => setCustomDateTime(e.target.value)}
                     className="w-full p-2 border rounded-md bg-bkg border-content/20 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-                    max={getCurrentDateTime()} // منع اختيار تاريخ مستقبلي
                   />
                   <p className="text-xs text-content-secondary mt-1">
                     💡 يمكنك اختيار تاريخ سابق لترتيب التعليقات حسب التسلسل الزمني الصحيح
                   </p>
                 </div>
               )}
+              <div className="flex items-center gap-2 mt-3">
+                <input
+                  type="checkbox"
+                  id="showCommentInCalendar"
+                  checked={showCommentInCalendar}
+                  onChange={(e) => setShowCommentInCalendar(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="showCommentInCalendar" className="text-sm font-medium text-content">
+                  إظهار هذا التعليق في التقويم
+                </label>
+              </div>
             </div>
             
             <button

@@ -83,10 +83,10 @@ const UnifiedNotifications: React.FC<UnifiedNotificationsProps> = ({
     }
   }, [userId]);
 
-  // جلب إشعارات التعليقات
+  // جلب إشعارات التعليقات (غير المقروءة فقط)
   const fetchCommentNotifications = async () => {
     try {
-      const response = await fetch(`/api/comment-notifications/user/${userId}`);
+      const response = await fetch(`/api/comment-notifications/user/${userId}?unreadOnly=true`);
       if (!response.ok) return;
       try {
         const data = await response.json();
@@ -324,15 +324,15 @@ const UnifiedNotifications: React.FC<UnifiedNotificationsProps> = ({
         
         {/* مؤشر إشعارات التعليقات (أخضر - يسار) */}
         {commentUnreadCount > 0 && (
-          <span className="absolute -top-1 -left-1 bg-green-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-            {commentUnreadCount > 9 ? '9+' : commentUnreadCount}
+          <span className="absolute -top-1 -left-1 bg-green-500 text-white text-[10px] rounded-full h-4 min-w-[1.25rem] px-1 flex items-center justify-center">
+            {commentUnreadCount > 99 ? '99+' : commentUnreadCount}
           </span>
         )}
         
         {/* مؤشر إشعارات المهام الفرعية (أحمر - يمين) */}
         {assignmentUnreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-            {assignmentUnreadCount > 9 ? '9+' : assignmentUnreadCount}
+          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full h-4 min-w-[1.25rem] px-1 flex items-center justify-center">
+            {assignmentUnreadCount > 99 ? '99+' : assignmentUnreadCount}
           </span>
         )}
         

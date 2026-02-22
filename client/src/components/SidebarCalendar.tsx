@@ -13,6 +13,15 @@ type CalendarItem = {
   AssignedToName?: string;
 };
 
+type CalendarCommentItem = {
+  CommentID: number;
+  TaskID: number;
+  TaskTitle: string;
+  Content: string;
+  CreatedAt: string;
+  CommentedByName?: string;
+};
+
 type SidebarCalendarProps = {
   currentUser: CurrentUser;
 };
@@ -23,6 +32,8 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
   type PersonalEventItem = { EventID: number; Title: string; EventDate: string };
   const [personalEvents, setPersonalEvents] = useState<PersonalEventItem[]>([]);
   const [extraPersonalEvents, setExtraPersonalEvents] = useState<PersonalEventItem[]>([]);
+  const [commentEvents, setCommentEvents] = useState<CalendarCommentItem[]>([]);
+  const [extraCommentEvents, setExtraCommentEvents] = useState<CalendarCommentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newEventTitle, setNewEventTitle] = useState('');
   // وضع الفلترة للتقويم: مشترك، خاص، أو كلاهما
@@ -37,6 +48,9 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
   const [newEventDate, setNewEventDate] = useState(getTodayStr());
   const [submittingEvent, setSubmittingEvent] = useState(false);
   const navigate = useNavigate();
+  const openTaskInNewTab = (taskId: number) => {
+    window.open(`/task/${taskId}`, '_blank', 'noopener,noreferrer');
+  };
 
   // بناء نطاق الأيام بدءًا من اليوم وحتى 30 يومًا
   const dateRange = useMemo(() => {
@@ -62,6 +76,7 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
   }, []);
 
   // جلب أحداث التقويم لمدى 30 يومًا ابتداءً من اليوم + الأحداث اللاحقة دون مربعات فارغة
+
   const fetchCalendarRange = async () => {
     setLoading(true);
     try {
@@ -86,7 +101,6 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
       }
       setItems(Array.isArray(data) ? data : []);
 
-      // أحداث خاصة ضمن 30 يوماً
       try {
         const perRes = await fetch(`/api/calendar/personal-events?userId=${currentUser.UserID}&startDate=${startStr}&days=30`);
         if (perRes.ok) {
@@ -100,7 +114,19 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
         setPersonalEvents([]);
       }
 
-      // الأحداث بعد نهاية الشبكة (30 يومًا)
+      try {
+        const commentsRes = await fetch(`/api/calendar/comments?userId=${currentUser.UserID}&startDate=${startStr}&days=30`);
+        if (commentsRes.ok) {
+          const cct = commentsRes.headers.get('content-type') || '';
+          const commentsData = cct.includes('application/json') ? await commentsRes.json() : [];
+          setCommentEvents(Array.isArray(commentsData) ? commentsData : []);
+        } else {
+          setCommentEvents([]);
+        }
+      } catch (_) {
+        setCommentEvents([]);
+      }
+
       const gridEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 30);
       const gridEndStr = toLocalYMD(gridEnd);
       const extraRes = await fetch(`/api/calendar/subtasks?userId=${currentUser.UserID}&startDate=${gridEndStr}&days=365`);
@@ -118,7 +144,6 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
         setExtraItems(Array.isArray(extraData) ? extraData : []);
       }
 
-      // أحداث خاصة بعد 30 يوماً
       try {
         const extraPerRes = await fetch(`/api/calendar/personal-events?userId=${currentUser.UserID}&startDate=${gridEndStr}&days=365`);
         if (extraPerRes.ok) {
@@ -131,11 +156,26 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
       } catch (_) {
         setExtraPersonalEvents([]);
       }
+
+      try {
+        const extraCommentsRes = await fetch(`/api/calendar/comments?userId=${currentUser.UserID}&startDate=${gridEndStr}&days=365`);
+        if (extraCommentsRes.ok) {
+          const ecct = extraCommentsRes.headers.get('content-type') || '';
+          const extraCommentsData = ecct.includes('application/json') ? await extraCommentsRes.json() : [];
+          setExtraCommentEvents(Array.isArray(extraCommentsData) ? extraCommentsData : []);
+        } else {
+          setExtraCommentEvents([]);
+        }
+      } catch (_) {
+        setExtraCommentEvents([]);
+      }
     } catch (err) {
       setItems([]);
       setExtraItems([]);
       setPersonalEvents([]);
       setExtraPersonalEvents([]);
+      setCommentEvents([]);
+      setExtraCommentEvents([]);
     } finally {
       setLoading(false);
     }
@@ -156,7 +196,6 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
     };
   }, [currentUser.UserID]);
 
-  // تجميع العناصر حسب اليوم (YYYY-MM-DD)
   const itemsByDay = useMemo(() => {
     const map: Record<string, CalendarItem[]> = {};
     for (const it of items) {
@@ -168,13 +207,28 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
     return map;
   }, [items]);
 
+  const commentsByDay = useMemo(() => {
+    const map: Record<string, CalendarCommentItem[]> = {};
+    for (const comment of commentEvents) {
+      const d = new Date(comment.CreatedAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(comment);
+    }
+    return map;
+  }, [commentEvents]);
+
   return (
     <aside className="w-72 shrink-0 border-r border-content/10 bg-content/5 p-3">
       <div className="mb-3">
-        <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => navigate('/calendar')}
+          className="flex items-center gap-2 hover:text-primary transition-colors"
+        >
           <CalendarIcon className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-bold">التقويم</h2>
-        </div>
+        </button>
         <p className="text-xs text-content-secondary mt-1">يعرض الأحداث خلال 30 يوماً القادمة.</p>
         {/* عناصر التحكم بالفلترة */}
         <div className="flex items-center gap-1 mt-2">
@@ -251,8 +305,11 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
         <div className="text-sm text-content-secondary">جاري التحميل...</div>
       ) : (
         <div className="space-y-4">
-          {/* رسالة عدم وجود أحداث حسب الفلتر */}
-          {(viewFilter === 'shared' ? (items.length === 0) : viewFilter === 'personal' ? (personalEvents.length === 0) : (items.length === 0 && personalEvents.length === 0)) && (
+          {(viewFilter === 'shared'
+            ? items.length === 0
+            : viewFilter === 'personal'
+            ? personalEvents.length === 0 && commentEvents.length === 0
+            : items.length === 0 && personalEvents.length === 0 && commentEvents.length === 0) && (
             <div className="p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-700 text-xs text-yellow-800 dark:text-yellow-200">
               لا توجد أحداث في هذا النطاق.
               تأكد من وجود مهام فرعية بتاريخ استحقاق ضمن 30 يومًا وتفعيل خيار "إظهار في التقويم".
@@ -273,9 +330,14 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                 const key = `${ev.getFullYear()}-${String(ev.getMonth() + 1).padStart(2, '0')}-${String(ev.getDate()).padStart(2, '0')}`;
                 return key === d.key;
               });
+              const dayComments = commentsByDay[d.key] || [];
               const visibleShared = viewFilter !== 'personal' ? dayItems : [];
               const visiblePersonal = viewFilter !== 'shared' ? dayPersonal : [];
-              const hasEvents = visibleShared.length > 0 || visiblePersonal.length > 0;
+              const visibleComments = viewFilter !== 'shared' ? dayComments : [];
+              const hasEvents =
+                visibleShared.length > 0 ||
+                visiblePersonal.length > 0 ||
+                visibleComments.length > 0;
               const isWeekend = d.date.getDay() === 5 || d.date.getDay() === 6; // الجمعة=5، السبت=6
               return (
                 <li
@@ -300,7 +362,7 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                           <button
                             type="button"
                             className="font-semibold text-blue-800 dark:text-blue-200 hover:underline cursor-pointer text-right"
-                            onClick={() => navigate(`/task/${item.TaskID}`)}
+                            onClick={() => openTaskInNewTab(item.TaskID)}
                           >
                             {item.SubtaskTitle}{item.AssignedToName ? ` (${item.AssignedToName})` : ''}
                           </button>
@@ -319,12 +381,28 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                       ))}
                     </div>
                   )}
+                  {visibleComments.length > 0 && (
+                    <div className="space-y-1 text-right mt-1">
+                      {visibleComments.map((comment) => (
+                        <button
+                          key={comment.CommentID}
+                          type="button"
+                          onClick={() => openTaskInNewTab(comment.TaskID)}
+                          className="text-xs font-semibold text-purple-800 dark:text-purple-200 hover:underline text-right w-full"
+                        >
+                          {comment.Content}
+                          <div className="text-[11px] text-content-secondary">ضمن: {comment.TaskTitle}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </li>
               );
             })}
           </ul>
 
-          {((viewFilter !== 'personal' && extraItems.length > 0) || (viewFilter !== 'shared' && extraPersonalEvents.length > 0)) && (
+          {((viewFilter !== 'personal' && extraItems.length > 0) ||
+            (viewFilter !== 'shared' && (extraPersonalEvents.length > 0 || extraCommentEvents.length > 0))) && (
             <div>
               <h3 className="text-sm font-bold text-content mb-2">أحداث بعد 30 يوم</h3>
               <ul className="space-y-2">
@@ -337,7 +415,7 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                       <button
                         type="button"
                         className="font-semibold text-blue-800 dark:text-blue-200 hover:underline cursor-pointer text-right"
-                        onClick={() => navigate(`/task/${item.TaskID}`)}
+                        onClick={() => openTaskInNewTab(item.TaskID)}
                       >
                         {item.SubtaskTitle}{item.AssignedToName ? ` (${item.AssignedToName})` : ''}
                       </button>
@@ -353,6 +431,23 @@ const SidebarCalendar = ({ currentUser }: SidebarCalendarProps) => {
                     <div className="text-xs">
                       <span className="font-semibold text-green-800 dark:text-green-200 text-right">{pe.Title}</span>
                       <span className="ml-1 inline-block text-[10px] text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30 px-1 py-[1px] rounded">(خاص)</span>
+                    </div>
+                  </li>
+                ))}
+                {viewFilter !== 'shared' && extraCommentEvents.map((comment) => (
+                  <li key={comment.CommentID} className="p-2 rounded bg-white/60 dark:bg-gray-800/60 border border-content/10 text-right">
+                    <div className="text-xs text-content-secondary mb-1">
+                      {new Date(comment.CreatedAt).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </div>
+                    <div className="text-xs">
+                      <button
+                        type="button"
+                        onClick={() => openTaskInNewTab(comment.TaskID)}
+                        className="font-semibold text-purple-800 dark:text-purple-200 hover:underline text-right w-full"
+                      >
+                        {comment.Content}
+                        <div className="text-[11px] text-content-secondary">ضمن: {comment.TaskTitle}</div>
+                      </button>
                     </div>
                   </li>
                 ))}

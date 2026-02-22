@@ -28,7 +28,8 @@ const config = {
     user: process.env.DB_USER, // من ملف .env
     password: process.env.DB_PASSWORD, // من ملف .env
     server: process.env.DB_SERVER, // من ملف .env
-    database: process.env.DB_DATABASE, // من ملف .env
+    database: process.env.DB_DATABASE || 'AlBaharTaskManagement2',
+    port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : undefined,
     options: {
       encrypt: process.env.DB_ENCRYPT === 'true',
       trustServerCertificate: process.env.DB_TRUST_CERT === 'true',
@@ -55,8 +56,17 @@ const config = {
   },
 };
 
-// تحديد البيئة الحالية (افتراضياً 'production')
-const env = process.env.NODE_ENV || 'production';
+// تحديد البيئة الحالية مع تمييز وضع الـ exe (pkg)
+let env;
+if (process.env.NODE_ENV) {
+  env = process.env.NODE_ENV;
+} else if (process.pkg) {
+  // عند تشغيل الملف الناتج عن pkg (bahar.exe) نستخدم إعدادات الإنتاج افتراضياً
+  env = 'production';
+} else {
+  // في تشغيل node العادي بدون تحديد NODE_ENV نستخدم إعدادات التطوير
+  env = 'development';
+}
 
 // تصدير الإعدادات المناسبة للبيئة الحالية
 module.exports = config[env];

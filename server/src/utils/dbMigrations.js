@@ -1,7 +1,6 @@
 // src/utils/dbMigrations.js
 const sql = require('mssql');
 
-// يضمن وجود عمود ShowInCalendar في جدول Subtasks (آمن للتشغيل المتكرر)
 async function ensureSubtasksCalendarFlag(pool) {
   const checkQuery = "SELECT COL_LENGTH('dbo.Subtasks', 'ShowInCalendar') AS Len";
   try {
@@ -27,8 +26,34 @@ async function ensureSubtasksCalendarFlag(pool) {
   }
 }
 
+async function ensureCommentsCalendarFlag(pool) {
+  const checkQuery = "SELECT COL_LENGTH('dbo.Comments', 'ShowInCalendar') AS Len";
+  try {
+    const check = await pool.request().query(checkQuery);
+    const exists = !!(check.recordset && check.recordset[0] && check.recordset[0].Len);
+    if (exists) {
+      console.log('ℹ️ ShowInCalendar column already exists in Comments.');
+      return { changed: false };
+    }
+
+    const alterQuery = `
+      IF COL_LENGTH('dbo.Comments', 'ShowInCalendar') IS NULL
+      BEGIN
+          ALTER TABLE dbo.Comments ADD ShowInCalendar BIT NOT NULL CONSTRAINT DF_Comments_ShowInCalendar DEFAULT(0);
+      END
+    `;
+    await pool.request().query(alterQuery);
+    console.log('✅ Added ShowInCalendar column to Comments table.');
+    return { changed: true };
+  } catch (err) {
+    console.error('❌ Failed ensuring ShowInCalendar column in Comments:', err);
+    throw err;
+  }
+}
+
 module.exports = {
   ensureSubtasksCalendarFlag,
+  ensureCommentsCalendarFlag,
   // يضمن وجود جدول أحداث التقويم الخاصة بالمستخدم (آمن للتشغيل المتكرر)
   ensurePersonalEventsTable: async function ensurePersonalEventsTable(pool) {
     try {
