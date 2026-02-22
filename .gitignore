@@ -4,3 +4,8 @@ client/dist/
 .env
 chrome-extension/
 server/dist/
+
+server/release/
+Production-Release/
+
+*.exe
