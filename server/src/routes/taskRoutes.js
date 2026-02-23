@@ -53,6 +53,9 @@ router.put('/:taskId/view', taskController.updateTaskView);
 // PATCH /api/tasks/1/url (لتحديث رابط المهمة الخارجي)
 router.patch('/:id/url', taskController.updateTaskUrl);
 
+// PATCH /api/tasks/1/title (لتحديث عنوان المهمة)
+router.patch('/:id/title', taskController.updateTaskTitle);
+
 // GET /api/tasks/1/user-priority (للحصول على الأولوية الشخصية للمستخدم)
 router.get('/:id/user-priority', taskController.getUserTaskPriority);
 

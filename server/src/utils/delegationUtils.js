@@ -1,21 +1,13 @@
 // src/utils/delegationUtils.js
 const sql = require('mssql');
 
-/**
- * التحقق من صلاحية المستخدم لإدارة مهام مستخدم آخر
- * @param {string} delegatorUserId - معرف المستخدم المفوِّض (منشئ المهمة)
- * @param {string} delegateUserId - معرف المستخدم المفوَّض إليه
- * @param {string} permissionType - نوع الصلاحية المطلوبة
- * @returns {Promise<boolean>} - true إذا كانت الصلاحية متاحة
- */
-async function checkDelegationPermission(delegatorUserId, delegateUserId, permissionType) {
+async function checkDelegationPermission(pool, delegatorUserId, delegateUserId, permissionType) {
   try {
-    // إذا كان المستخدم هو نفسه منشئ المهمة، فله جميع الصلاحيات
     if (delegatorUserId === delegateUserId) {
       return true;
     }
-    
-    const request = new sql.Request();
+
+    const request = pool.request();
     request.input('delegatorUserID', sql.NVarChar(50), delegatorUserId);
     request.input('delegateUserID', sql.NVarChar(50), delegateUserId);
     request.input('permissionType', sql.NVarChar(50), permissionType);
@@ -31,19 +23,12 @@ async function checkDelegationPermission(delegatorUserId, delegateUserId, permis
   }
 }
 
-/**
- * التحقق من وجود تفويض نشط بغض النظر عن نوع الصلاحيات
- * يُستخدم لضبط ActedBy عند العمل بالنيابة
- * @param {string} delegatorUserId - معرف المفوِّض (صاحب المهام)
- * @param {string} delegateUserId - معرف المفوَّض إليه
- * @returns {Promise<boolean>} - true إذا كان هناك تفويض نشط حاليًا
- */
-async function hasActiveDelegation(delegatorUserId, delegateUserId) {
+async function hasActiveDelegation(pool, delegatorUserId, delegateUserId) {
   try {
     if (!delegatorUserId || !delegateUserId) return false;
     if (delegatorUserId === delegateUserId) return true;
 
-    const request = new sql.Request();
+    const request = pool.request();
     request.input('delegatorUserID', sql.NVarChar(50), delegatorUserId);
     request.input('delegateUserID', sql.NVarChar(50), delegateUserId);
     const result = await request.query(`
@@ -62,14 +47,9 @@ async function hasActiveDelegation(delegatorUserId, delegateUserId) {
   }
 }
 
-/**
- * الحصول على جميع المستخدمين الذين فوضوا صلاحياتهم للمستخدم الحالي
- * @param {string} delegateUserId - معرف المستخدم المفوَّض إليه
- * @returns {Promise<Array>} - قائمة بالمستخدمين المفوِّضين
- */
-async function getDelegatorsForUser(delegateUserId) {
+async function getDelegatorsForUser(pool, delegateUserId) {
   try {
-    const request = new sql.Request();
+    const request = pool.request();
     request.input('delegateUserID', sql.NVarChar(50), delegateUserId);
     
     const result = await request.query(`
@@ -94,14 +74,9 @@ async function getDelegatorsForUser(delegateUserId) {
   }
 }
 
-/**
- * الحصول على جميع المستخدمين المفوَّض إليهم من قبل المستخدم الحالي
- * @param {string} delegatorUserId - معرف المستخدم المفوِّض
- * @returns {Promise<Array>} - قائمة بالمستخدمين المفوَّض إليهم
- */
-async function getDelegatesForUser(delegatorUserId) {
+async function getDelegatesForUser(pool, delegatorUserId) {
   try {
-    const request = new sql.Request();
+    const request = pool.request();
     request.input('delegatorUserID', sql.NVarChar(50), delegatorUserId);
     
     const result = await request.query(`
@@ -126,16 +101,9 @@ async function getDelegatesForUser(delegatorUserId) {
   }
 }
 
-/**
- * تحديث استعلام المهام لتشمل المهام المفوضة
- * @param {string} userId - معرف المستخدم الحالي
- * @param {boolean} isAdmin - هل المستخدم مدير
- * @returns {Promise<string>} - استعلام SQL محدث
- */
-async function getTasksQueryWithDelegation(userId, isAdmin) {
+async function getTasksQueryWithDelegation(pool, userId, isAdmin) {
   try {
     if (isAdmin) {
-      // المدير يرى جميع المهام غير المكتملة فقط لتخفيف العبء
       return `
         SELECT t.*, creator.FullName as CreatedByName, acted.FullName as ActedByName, c.Name as CategoryName,
                CASE WHEN t.CreatedBy = '${userId}' THEN 'owner' ELSE 'admin' END as AccessType
@@ -148,8 +116,7 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
       `;
     }
     
-    // الحصول على المستخدمين المفوِّضين
-    const delegators = await getDelegatorsForUser(userId);
+    const delegators = await getDelegatorsForUser(pool, userId);
     const delegatorIds = delegators.map(d => `'${d.DelegatorUserID}'`).join(',');
     
     let delegationCondition = '';
@@ -196,18 +163,9 @@ async function getTasksQueryWithDelegation(userId, isAdmin) {
   }
 }
 
-/**
- * التحقق من صلاحية الوصول لمهمة معينة
- * @param {number} taskId - معرف المهمة
- * @param {string} userId - معرف المستخدم
- * @param {boolean} isAdmin - هل المستخدم مدير
- * @param {string} requiredPermission - الصلاحية المطلوبة (view, edit, delete, etc.)
- * @returns {Promise<Object>} - معلومات الوصول
- */
-async function checkTaskAccess(taskId, userId, isAdmin, requiredPermission = 'view') {
+async function checkTaskAccess(pool, taskId, userId, isAdmin, requiredPermission = 'view') {
   try {
-    // الحصول على معلومات المهمة
-    const taskRequest = new sql.Request();
+    const taskRequest = pool.request();
     taskRequest.input('taskId', sql.Int, taskId);
     
     const taskResult = await taskRequest.query(`
@@ -222,24 +180,20 @@ async function checkTaskAccess(taskId, userId, isAdmin, requiredPermission = 'vi
     
     const task = taskResult.recordset[0];
     
-    // المدير له صلاحية الوصول لجميع المهام
     if (isAdmin) {
       return { hasAccess: true, accessType: 'admin', task };
     }
     
-    // منشئ المهمة له جميع الصلاحيات
     if (task.CreatedBy === userId) {
       return { hasAccess: true, accessType: 'owner', task };
     }
     
-    // التحقق من التفويض
-    const hasDelegationPermission = await checkDelegationPermission(task.CreatedBy, userId, requiredPermission);
+    const hasDelegationPermission = await checkDelegationPermission(pool, task.CreatedBy, userId, requiredPermission);
     if (hasDelegationPermission) {
       return { hasAccess: true, accessType: 'delegated', task };
     }
     
-    // التحقق من إسناد المهام الفرعية
-    const subtaskRequest = new sql.Request();
+    const subtaskRequest = pool.request();
     subtaskRequest.input('taskId', sql.Int, taskId);
     subtaskRequest.input('userId', sql.NVarChar(50), userId);
     

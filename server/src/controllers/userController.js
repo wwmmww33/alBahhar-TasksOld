@@ -1,5 +1,6 @@
 // src/controllers/userController.js
 const sql = require('mssql');
+const encryptionConfig = require('../config/encryption.config');
 
 // ... (getAllUsers و updateUser تبقى كما هي) ...
 // في userController.js
@@ -48,8 +49,9 @@ exports.updateUser = async (req, res) => {
         
         // تحديث كلمة المرور فقط إذا تم إرسال كلمة مرور جديدة (غير فارغة)
         if (PasswordHash && PasswordHash.length > 0) {
+            const hashed = encryptionConfig.hashPassword(PasswordHash).combined;
             query += ', PasswordHash = @PasswordHash';
-            request.input('PasswordHash', sql.NVarChar, PasswordHash);
+            request.input('PasswordHash', sql.NVarChar, hashed);
         }
         
         query += ' WHERE UserID = @UserID';

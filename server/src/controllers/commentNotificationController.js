@@ -45,6 +45,9 @@ const getCommentNotifications = async (req, res) => {
             if (n.TaskTitle) {
                 try { n.TaskTitle = encryptionConfig.decrypt(n.TaskTitle); } catch (e) {}
             }
+            if (n.CommentContent) {
+                try { n.CommentContent = encryptionConfig.decrypt(n.CommentContent); } catch (e) {}
+            }
             return n;
         });
         

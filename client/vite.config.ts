@@ -26,7 +26,7 @@ export default defineConfig({
     proxy: {
       // أي طلب يبدأ بـ /api سيتم توجيهه إلى الخادم الخلفي
       '/api': {
-        target: 'http://localhost:5002', // عنوان الخادم الخلفي (نستخدم منفذ بديل لتجنب التعارض)
+        target: 'http://localhost:5001', // عنوان الخادم الخلفي
         changeOrigin: true, // ضروري للخوادم الافتراضية
       }
     }

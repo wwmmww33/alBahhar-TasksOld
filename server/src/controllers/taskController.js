@@ -9,8 +9,7 @@ exports.getAllTasks = async (req, res) => {
     if (!userId) { return res.status(401).json({ message: 'User identification is required.' }); }
 
     try {
-        // استخدام الدالة المحدثة التي تدعم التفويض
-        const query = await getTasksQueryWithDelegation(userId, isAdmin === 'true');
+        const query = await getTasksQueryWithDelegation(pool, userId, isAdmin === 'true');
         const request = pool.request();
         const result = await request.query(query);
         const tasks = result.recordset.map(t => {
@@ -98,7 +97,6 @@ exports.assignTask = async (req, res) => {
     }
 
     try {
-        // الحصول على معلومات المهمة الحالية
         const taskResult = await pool.request()
             .input('TaskID', sql.Int, id)
             .query('SELECT AssignedTo FROM Tasks WHERE TaskID = @TaskID');
@@ -110,22 +108,21 @@ exports.assignTask = async (req, res) => {
         const task = taskResult.recordset[0];
         const previousAssignedTo = task.AssignedTo;
 
-        // تحديث إسناد المهمة الرئيسية
         await pool.request()
             .input('TaskID', sql.Int, id)
             .input('AssignedTo', sql.NVarChar, assignedToUserId || null)
             .query('UPDATE Tasks SET AssignedTo = @AssignedTo WHERE TaskID = @TaskID');
 
-        // إضافة إشعار إذا تم إسناد المهمة لشخص جديد
-        if (assignedToUserId && assignedToUserId !== previousAssignedTo) {
+        if (assignedToUserId && assignedToUserId !== previousAssignedTo && assignedByUserId) {
             await pool.request()
                 .input('TaskID', sql.Int, id)
                 .input('AssignedToUserID', sql.NVarChar, assignedToUserId)
-                .input('AssignedByUserID', sql.NVarChar, assignedByUserId || 'system')
+                .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
                 .query(`
                     INSERT INTO TaskAssignmentNotifications 
                     (TaskID, AssignedToUserID, AssignedByUserID)
-                    VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+                    SELECT @TaskID, @AssignedToUserID, @AssignedByUserID
+                    WHERE EXISTS (SELECT 1 FROM Users WHERE UserID = @AssignedByUserID)
                 `);
         }
 
@@ -149,11 +146,10 @@ exports.createTask = async (req, res) => {
   const transaction = new sql.Transaction(pool);
   try {
     await transaction.begin();
-    // لا نملأ ActedBy إلا إذا كان المستخدم يعمل كمفوَّض (تفويض نشط)
     let actorUserId = null;
     if (ActedBy && ActedBy !== CreatedBy) {
       try {
-        const active = await hasActiveDelegation(CreatedBy, ActedBy);
+        const active = await hasActiveDelegation(pool, CreatedBy, ActedBy);
         if (active) {
           actorUserId = ActedBy;
         }
@@ -200,8 +196,7 @@ exports.getTaskById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // استخدام دالة التحقق من الصلاحية المحدثة
-    const accessCheck = await checkTaskAccess(id, userId, isAdmin === 'true', 'view');
+    const accessCheck = await checkTaskAccess(pool, id, userId, isAdmin === 'true', 'view');
     
     if (!accessCheck.hasAccess) {
       return res.status(403).json({ message: accessCheck.reason });
@@ -251,8 +246,7 @@ exports.getSubtasksForTask = async (req, res) => {
   }
   
   try {
-    // التحقق من صلاحية الوصول باستخدام نظام التفويض
-    const accessCheck = await checkTaskAccess(id, userId, isAdmin === 'true', 'view');
+    const accessCheck = await checkTaskAccess(pool, id, userId, isAdmin === 'true', 'view');
     
     if (!accessCheck.hasAccess) {
       return res.status(403).json({ message: accessCheck.reason });
@@ -295,8 +289,7 @@ exports.getCommentsForTask = async (req, res) => {
   }
   
   try {
-    // التحقق من صلاحية الوصول باستخدام نظام التفويض
-    const accessCheck = await checkTaskAccess(id, userId, isAdmin === 'true', 'view');
+    const accessCheck = await checkTaskAccess(pool, id, userId, isAdmin === 'true', 'view');
     
     if (!accessCheck.hasAccess) {
       return res.status(403).json({ message: accessCheck.reason });
@@ -514,8 +507,7 @@ exports.deleteTask = async (req, res) => {
   try {
     await transaction.begin();
     
-    // التحقق من صلاحية الحذف باستخدام نظام التفويض
-    const accessCheck = await checkTaskAccess(taskIdInt, userId, isAdmin === 'true', 'delete');
+    const accessCheck = await checkTaskAccess(pool, taskIdInt, userId, isAdmin === 'true', 'delete');
     
     if (!accessCheck.hasAccess) {
       await transaction.rollback();
@@ -639,6 +631,44 @@ exports.updateTaskUrl = async (req, res) => {
     }
 };
 
+// تحديث عنوان المهمة
+exports.updateTaskTitle = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { id } = req.params;
+    let { Title } = req.body;
+
+    if (typeof Title !== 'string') {
+        return res.status(400).json({ message: 'Title is required and must be a string.' });
+    }
+
+    Title = Title.trim();
+    if (!Title) {
+        return res.status(400).json({ message: 'Title cannot be empty.' });
+    }
+
+    let encryptedTitle;
+    try {
+        encryptedTitle = encryptionConfig.encrypt(Title);
+    } catch (e) {
+        return res.status(500).json({ message: 'Error encrypting title' });
+    }
+
+    try {
+        await pool.request()
+            .input('TaskID', sql.Int, id)
+            .input('Title', sql.NVarChar, encryptedTitle)
+            .query(`
+                UPDATE Tasks
+                SET Title = @Title, UpdatedAt = GETDATE()
+                WHERE TaskID = @TaskID
+            `);
+        return res.status(200).json({ message: 'Task title updated successfully' });
+    } catch (error) {
+        console.error('UPDATE TASK TITLE ERROR:', error);
+        return res.status(500).json({ message: 'Error updating task title' });
+    }
+};
+
 // الحصول على المهام مع معلومات الإشعارات
 exports.getTasksWithNotifications = async (req, res) => {
     const pool = req.app.locals.db;
@@ -649,8 +679,7 @@ exports.getTasksWithNotifications = async (req, res) => {
     }
     
     try {
-        // استخدام الدالة المحدثة التي تدعم التفويض (تجلب المهام غير المكتملة فقط)
-        const baseQuery = await getTasksQueryWithDelegation(userId, isAdmin === 'true');
+        const baseQuery = await getTasksQueryWithDelegation(pool, userId, isAdmin === 'true');
 
         // تعديل الاستعلام لإضافة معلومات الإشعارات مع الحفاظ على ActedByName
         let query = baseQuery.replace(

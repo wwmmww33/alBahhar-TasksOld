@@ -1,123 +1,125 @@
 // src/config/encryption.config.js (تعطيل التشفير وجعل الوظائف تمريرية)
 // لا نستخدم أي مكتبات تشفير هنا؛ جميع الدوال ستكون تمريرية لضمان عدم حدوث أخطاء
 
+const crypto = require('crypto');
+require('dotenv').config();
+
 class EncryptionConfig {
     constructor() {
-        // الإعدادات القديمة أصبحت غير فعّالة. نبقي الحقول فقط لتجنب كسر الاستيراد.
-        this.encryptionKey = null;
-        this.algorithm = null;
-        this.keyLength = 0;
-        this.ivLength = 0;
-        this.tagLength = 0;
+        const defaultSecret = 'this is key';
+        const secret = process.env.ENCRYPTION_KEY || defaultSecret;
         this.keyVersion = 'v1';
-        this.keysMap = {};
-        this.key = null;
+        this.key = crypto.createHash('sha256').update(String(secret)).digest();
     }
 
-    // الحصول على مفتاح بحسب الإصدار المطلوب
-    getKeyForVersion(version) { return null; }
+    getKeyForVersion(version) {
+        if (version === this.keyVersion) return this.key;
+        return null;
+    }
 
-    /**
-     * تشفير النص
-     * @param {string} text - النص المراد تشفيره
-     * @returns {string} - النص المشفر بالتنسيق: version|iv:tag:cipherHex
-     */
     encrypt(text) {
-        // تمريري: نعيد النص كما هو
         if (text === null || text === undefined) return null;
-        return typeof text === 'string' ? text : String(text);
+        const value = typeof text === 'string' ? text : String(text);
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv);
+        const encrypted = Buffer.concat([cipher.update(Buffer.from(value, 'utf8')), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        const payload = [
+            iv.toString('base64'),
+            tag.toString('base64'),
+            encrypted.toString('base64'),
+        ].join(':');
+        return `${this.keyVersion}|${payload}`;
     }
 
-    /**
-     * فك تشفير النص
-     * @param {string} encryptedData - البيانات المشفرة (قد تحتوي بادئة الإصدار)
-     * @returns {string} - النص الأصلي
-     */
     decrypt(encryptedData) {
-        // تمريري: نعيد النص كما هو، دون أي تحقق أو استثناءات
         if (encryptedData === null || encryptedData === undefined) return null;
-        return typeof encryptedData === 'string' ? encryptedData : String(encryptedData);
+        let value = typeof encryptedData === 'string' ? encryptedData : String(encryptedData);
+        value = value.trim();
+        if (!value) return value;
+
+        const pipeIndex = value.indexOf('|');
+        if (pipeIndex === -1) {
+            return value;
+        }
+
+        const version = value.slice(0, pipeIndex);
+        const payload = value.slice(pipeIndex + 1);
+        const key = this.getKeyForVersion(version);
+        if (!key) {
+            return value;
+        }
+
+        const parts = payload.split(':');
+        if (parts.length !== 3) {
+            return value;
+        }
+
+        const iv = Buffer.from(parts[0], 'base64');
+        const tag = Buffer.from(parts[1], 'base64');
+        const encrypted = Buffer.from(parts[2], 'base64');
+
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(tag);
+        const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        return decrypted.toString('utf8');
     }
 
-    /**
-     * تشفير كلمة المرور مع Salt
-     * @param {string} password - كلمة المرور
-     * @param {string} salt - Salt (اختياري)
-     * @returns {object} - كلمة المرور المشفرة مع Salt
-     */
     hashPassword(password, salt = null) {
-        // نحافظ على التهشير إن لزم، لكن نجعله تمريريًا لتلبية طلب حذف التشفير
-        // إذا كان هناك Salt نستخدم صيغة "salt:password"، وإذا لم يوجد Salt نخزن كلمة المرور فقط بدون ":"
-        const usedSalt = salt || '';
         const pwd = (typeof password === 'string') ? password : (password || '');
-        const combined = usedSalt ? `${usedSalt}:${pwd}` : `${pwd}`;
-        return { hash: pwd, salt: usedSalt, combined };
+        const encrypted = this.encrypt(pwd);
+        return { hash: encrypted, salt: '', combined: encrypted };
     }
 
-    /**
-     * التحقق من كلمة المرور
-     * @param {string} password - كلمة المرور المدخلة
-     * @param {string} storedHash - كلمة المرور المخزنة (salt:hash)
-     * @returns {boolean} - true إذا كانت كلمة المرور صحيحة
-     */
     verifyPassword(password, storedHash) {
-        // تمريري: مقارنة نصية بسيطة
         if (!password || !storedHash) return false;
+        let encrypted = storedHash;
         const parts = storedHash.split(':');
-        const hash = parts.length === 2 ? parts[1] : storedHash;
-        return String(hash) === String(password);
+        if (storedHash.indexOf('|') === -1 && parts.length === 2) {
+            encrypted = parts[1];
+        }
+        try {
+            const plain = this.decrypt(encrypted);
+            return String(plain) === String(password);
+        } catch (e) {
+            return String(storedHash) === String(password);
+        }
     }
 
-    /**
-     * تشفير البيانات الحساسة للتخزين في قاعدة البيانات
-     * @param {object} data - البيانات المراد تشفيرها
-     * @returns {string} - البيانات المشفرة
-     */
     encryptSensitiveData(data) {
-        // تمريري: نخزن كـ JSON نصي دون أي تشفير
         if (!data) return null;
-        try { return JSON.stringify(data); } catch { return String(data); }
+        const json = typeof data === 'string' ? data : JSON.stringify(data);
+        return this.encrypt(json);
     }
 
-    /**
-     * فك تشفير البيانات الحساسة
-     * @param {string} encryptedData - البيانات المشفرة
-     * @returns {object} - البيانات الأصلية
-     */
     decryptSensitiveData(encryptedData) {
-        // تمريري: نحاول قراءة JSON؛ إذا فشل نعيد النص كما هو
         if (!encryptedData) return null;
-        try { return JSON.parse(encryptedData); } catch { return encryptedData; }
+        const plain = this.decrypt(encryptedData);
+        try {
+            return JSON.parse(plain);
+        } catch (e) {
+            return plain;
+        }
     }
 
-    /**
-     * إنشاء token آمن
-     * @param {object} payload - البيانات المراد تضمينها في Token
-     * @param {number} expiresIn - مدة انتهاء الصلاحية بالثواني
-     * @returns {string} - Token مشفر
-     */
     createSecureToken(payload, expiresIn = 3600) {
-        // تمريري: نعيد JSON نصي يتضمن الصلاحية بدون تشفير
         const tokenData = { payload, exp: Date.now() + (expiresIn * 1000), iat: Date.now() };
-        return JSON.stringify(tokenData);
+        const json = JSON.stringify(tokenData);
+        return this.encrypt(json);
     }
 
-    /**
-     * التحقق من Token آمن
-     * @param {string} token - Token المراد التحقق منه
-     * @returns {object|null} - البيانات إذا كان Token صالح، null إذا كان غير صالح
-     */
     verifySecureToken(token) {
-        // تمريري: نقرأ JSON مباشرة ونفحص الصلاحية
         if (!token) return null;
         try {
-            const tokenData = JSON.parse(token);
+            const json = this.decrypt(token);
+            const tokenData = JSON.parse(json);
             if (Date.now() > tokenData.exp) return null;
             return tokenData.payload;
-        } catch { return null; }
+        } catch (e) {
+            return null;
+        }
     }
 }
 
-// إنشاء instance واحد للاستخدام في التطبيق
 const encryptionConfig = new EncryptionConfig();
 module.exports = encryptionConfig;

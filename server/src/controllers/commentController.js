@@ -20,17 +20,15 @@ exports.createComment = async (req, res) => {
             return res.status(400).json({ message: 'Invalid CreatedAt date format.' });
         }
 
-        // تحديد ActedBy فقط عند وجود تفويض نشط من صاحب المهمة
         let actorUserId = null;
         if (ActedBy && ActedBy !== UserID) {
             try {
-                // جلب صاحب المهمة (المفوِّض)
                 const taskOwnerRes = await pool.request()
                     .input('TaskID', sql.Int, TaskID)
                     .query('SELECT TOP(1) CreatedBy FROM Tasks WHERE TaskID = @TaskID');
                 const delegatorId = taskOwnerRes.recordset[0]?.CreatedBy || null;
                 if (delegatorId) {
-                    const active = await hasActiveDelegation(delegatorId, ActedBy);
+                    const active = await hasActiveDelegation(pool, delegatorId, ActedBy);
                     if (active) {
                         actorUserId = ActedBy;
                     }

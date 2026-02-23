@@ -7,7 +7,12 @@ const dbConfig = require('../config/db.config');
 const encryptionConfig = require('../config/encryption.config');
 
 // إعدادات عامة
-const LOGS_DIR = path.join(__dirname, '..', '..', 'backfill_logs');
+const BASE_LOG_DIR = process.env.BACKFILL_LOG_DIR
+  ? path.resolve(process.env.BACKFILL_LOG_DIR)
+  : (process.pkg
+      ? path.join(process.cwd(), 'backfill_logs')
+      : path.join(__dirname, '..', '..', 'backfill_logs'));
+const LOGS_DIR = BASE_LOG_DIR;
 const DEFAULT_BATCH_SIZE = parseInt(process.env.BACKFILL_BATCH_SIZE || '500', 10);
 
 function ensureLogsDir() {
@@ -67,18 +72,13 @@ function parseArgs() {
 function needsEncryption(value) {
   if (value === null || value === undefined) return false;
   if (typeof value !== 'string') value = String(value);
-  // إذا نجح فك التشفير، فهذا يعني أنه بالفعل مشفر
-  try {
-    const txt = encryptionConfig.decrypt(value);
-    // إن نجح فك التشفير بدون استثناء، اعتبره مشفر مسبقًا
-    return false;
-  } catch (e) {
-    // فشل فك التشفير -> غالبًا نص عادي ويحتاج تشفير
-    return true;
-  }
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  // إذا لم يحتوِ النص على علامة النسخة | نعتبره نصًا عاديًا يحتاج لتشفير
+  return trimmed.indexOf('|') === -1;
 }
 
-async function processBatch(pool, table, pkField, valueField, nvarcharType, offset, batchSize, whereClause, updatesLog, dryRun) {
+async function processBatch(pool, table, pkField, valueField, nvarcharType, pkType, offset, batchSize, whereClause, updatesLog, dryRun) {
   const whereSql = whereClause ? `WHERE ${whereClause}` : '';
   const query = `SELECT ${pkField} AS id, ${valueField} AS val FROM ${table} ${whereSql} ORDER BY ${pkField} OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY;`;
   const rs = await pool.request()
@@ -106,7 +106,7 @@ async function processBatch(pool, table, pkField, valueField, nvarcharType, offs
       const encrypted = encryptionConfig.encrypt(row.val);
       const req = new sql.Request(tx);
       req.input('value', nvarcharType, encrypted);
-      req.input('id', sql.Int, row.id);
+      req.input('id', pkType, row.id);
       await req.query(`UPDATE ${table} SET ${valueField} = @value WHERE ${pkField} = @id;`);
       updatesLog.push({ table, pkField, pkValue: row.id, column: valueField, op: 'encrypt', ts: new Date().toISOString() });
       updatedCount++;
@@ -123,7 +123,7 @@ async function processBatch(pool, table, pkField, valueField, nvarcharType, offs
 }
 
 async function backfillTable(pool, opts) {
-  const { table, pkField, valueField, nvarcharType, whereClause = null, batchSize, updatesLog, dryRun } = opts;
+  const { table, pkField, valueField, nvarcharType, pkType = sql.Int, whereClause = null, batchSize, updatesLog, dryRun } = opts;
   console.log(`Starting backfill for ${table}.${valueField} ...`);
   let offset = 0;
   while (true) {
@@ -133,6 +133,7 @@ async function backfillTable(pool, opts) {
       pkField,
       valueField,
       nvarcharType,
+      pkType,
       offset,
       batchSize,
       whereClause,
@@ -159,10 +160,31 @@ async function backfillAll(pool, batchSize, dryRun) {
     table: 'Tasks', pkField: 'TaskID', valueField: 'Description', nvarcharType: sql.NVarChar, whereClause: 'Description IS NOT NULL', batchSize, updatesLog, dryRun
   });
   await backfillTable(pool, {
+    table: 'Tasks', pkField: 'TaskID', valueField: 'Title', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Title IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'Subtasks', pkField: 'SubtaskID', valueField: 'Title', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Title IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
     table: 'Comments', pkField: 'CommentID', valueField: 'Content', nvarcharType: sql.NVarChar, whereClause: 'Content IS NOT NULL', batchSize, updatesLog, dryRun
   });
   await backfillTable(pool, {
     table: 'CategoryInformation', pkField: 'InfoID', valueField: 'Content', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Content IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'Procedures', pkField: 'ProcedureID', valueField: 'Title', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Title IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'ProcedureSubtasks', pkField: 'ProcedureSubtaskID', valueField: 'Title', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Title IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'PersonalCalendarEvents', pkField: 'EventID', valueField: 'Title', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'Title IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'Users', pkField: 'UserID', valueField: 'PasswordHash', nvarcharType: sql.NVarChar(sql.MAX), pkType: sql.NVarChar(50), whereClause: 'PasswordHash IS NOT NULL', batchSize, updatesLog, dryRun
+  });
+  await backfillTable(pool, {
+    table: 'RegistrationRequests', pkField: 'RequestID', valueField: 'PasswordHash', nvarcharType: sql.NVarChar(sql.MAX), whereClause: 'PasswordHash IS NOT NULL', batchSize, updatesLog, dryRun
   });
 
   const resultSummary = { mode: 'encrypt', startedAt: new Date().toISOString(), batchSize, dryRun, updates: updatesLog };

@@ -330,6 +330,92 @@ exports.createPersonalEvent = async (req, res) => {
   }
 };
 
+exports.updatePersonalEvent = async (req, res) => {
+  const pool = req.app.locals.db;
+  const { id } = req.params;
+  const { userId, title, eventDate } = req.body;
+  if (!id || !userId) {
+    return res.status(400).json({ message: 'id and userId are required' });
+  }
+  if (!title && !eventDate) {
+    return res.status(400).json({ message: 'Nothing to update' });
+  }
+  try {
+    const request = pool.request()
+      .input('EventID', sql.Int, parseInt(id, 10))
+      .input('UserID', sql.NVarChar, userId);
+
+    let encTitle = null;
+    let normalizedDate = null;
+    const hasTitle = typeof title === 'string';
+    const hasDate = typeof eventDate === 'string' && eventDate.length > 0;
+
+    if (hasTitle) {
+      encTitle = encryptionConfig.encrypt(title);
+      request.input('Title', sql.NVarChar, encTitle);
+    }
+    if (hasDate) {
+      const d = new Date(eventDate);
+      normalizedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      request.input('EventDate', sql.Date, normalizedDate);
+    }
+
+    let setParts = [];
+    if (hasTitle) setParts.push('Title = @Title');
+    if (hasDate) setParts.push('EventDate = @EventDate');
+    const setClause = setParts.join(', ');
+
+    const result = await request.query(`
+      UPDATE PersonalCalendarEvents
+      SET ${setClause}
+      WHERE EventID = @EventID AND UserID = @UserID;
+
+      SELECT TOP 1 EventID, UserID, Title, EventDate, CreatedAt
+      FROM PersonalCalendarEvents
+      WHERE EventID = @EventID AND UserID = @UserID;
+    `);
+
+    const rows = result.recordset || [];
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    const updated = rows[rows.length - 1];
+    try { if (updated.Title) updated.Title = encryptionConfig.decrypt(updated.Title); } catch (_) {}
+    return res.status(200).json(updated);
+  } catch (err) {
+    console.error('Error updating personal event:', err);
+    return res.status(500).json({ message: 'Error updating personal event' });
+  }
+};
+
+exports.deletePersonalEvent = async (req, res) => {
+  const pool = req.app.locals.db;
+  const { id } = req.params;
+  const { userId } = req.query;
+  if (!id || !userId) {
+    return res.status(400).json({ message: 'id and userId are required' });
+  }
+  try {
+    const result = await pool.request()
+      .input('EventID', sql.Int, parseInt(id, 10))
+      .input('UserID', sql.NVarChar, userId)
+      .query(`
+        DELETE FROM PersonalCalendarEvents
+        WHERE EventID = @EventID AND UserID = @UserID;
+
+        SELECT @@ROWCOUNT as affected;
+      `);
+    const affectedRow = result.recordset && result.recordset[0] ? result.recordset[0].affected : 0;
+    if (!affectedRow) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    return res.status(200).json({ message: 'Event deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting personal event:', err);
+    return res.status(500).json({ message: 'Error deleting personal event' });
+  }
+};
+
 exports.getCalendarComments = async (req, res) => {
   const pool = req.app.locals.db;
   const { userId, startDate, days, includePast, includeAllComments } = req.query;

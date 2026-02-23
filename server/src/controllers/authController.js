@@ -1,5 +1,6 @@
 // src/controllers/authController.js
 const sql = require('mssql');
+const encryptionConfig = require('../config/encryption.config');
 
 // في authController.js
 
@@ -27,7 +28,9 @@ exports.login = async (req, res) => {
 
         if (!user) { return res.status(404).json({ message: 'المستخدم غير موجود.' }); }
         if (!user.IsActive) { return res.status(403).json({ message: 'هذا الحساب موقوف.' }); }
-        if (password !== user.PasswordHash) { return res.status(401).json({ message: 'كلمة المرور غير صحيحة.' }); }
+
+        const isValidPassword = encryptionConfig.verifyPassword(password, user.PasswordHash);
+        if (!isValidPassword) { return res.status(401).json({ message: 'كلمة المرور غير صحيحة.' }); }
         
         const { PasswordHash, ...userWithoutPassword } = user;
         res.status(200).json({ message: 'Login successful', user: userWithoutPassword });
@@ -41,9 +44,10 @@ exports.registerRequest = async (req, res) => {
     const pool = req.app.locals.db;
     const { userId, password, fullName, departmentId } = req.body;
     try {
+        const hashed = encryptionConfig.hashPassword(password).combined;
         await pool.request()
             .input('UserID', sql.NVarChar, userId)
-            .input('PasswordHash', sql.NVarChar, password) // تذكر: يجب استخدام Hashing هنا
+            .input('PasswordHash', sql.NVarChar, hashed)
             .input('FullName', sql.NVarChar, fullName)
             .input('DepartmentID', sql.Int, departmentId)
             .query('INSERT INTO RegistrationRequests (UserID, PasswordHash, FullName, DepartmentID) VALUES (@UserID, @PasswordHash, @FullName, @DepartmentID)');

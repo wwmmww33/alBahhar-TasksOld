@@ -1,5 +1,6 @@
 // src/controllers/profileController.js
 const sql = require('mssql');
+const encryptionConfig = require('../config/encryption.config');
 
 // تحديث الملف الشخصي للمستخدم
 exports.updateProfile = async (req, res) => {
@@ -31,7 +32,8 @@ exports.updateProfile = async (req, res) => {
                 return res.status(404).json({ message: 'User not found.' });
             }
 
-            if (CurrentPassword !== currentUser.PasswordHash) {
+            const isValidCurrent = encryptionConfig.verifyPassword(CurrentPassword, currentUser.PasswordHash);
+            if (!isValidCurrent) {
                 return res.status(401).json({ message: 'Current password is incorrect.' });
             }
         }
@@ -45,8 +47,9 @@ exports.updateProfile = async (req, res) => {
 
         // إضافة تحديث كلمة المرور إذا تم توفيرها
         if (PasswordHash) {
+            const hashed = encryptionConfig.hashPassword(PasswordHash).combined;
             query += ', PasswordHash = @PasswordHash';
-            request.input('PasswordHash', sql.NVarChar, PasswordHash);
+            request.input('PasswordHash', sql.NVarChar, hashed);
         }
 
         query += ' WHERE UserID = @UserID';

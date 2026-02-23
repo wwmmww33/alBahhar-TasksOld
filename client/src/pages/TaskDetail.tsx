@@ -33,6 +33,9 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionInput, setDescriptionInput] = useState<string>('');
   const [isUpdatingDescription, setIsUpdatingDescription] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleInput, setTitleInput] = useState<string>('');
+  const [isUpdatingTitle, setIsUpdatingTitle] = useState(false);
 
   const fetchAllDetails = useCallback(async () => {
     if (!taskId) return;
@@ -185,6 +188,35 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     }
   };
 
+  const handleUpdateTaskTitle = async (newTitle: string) => {
+    if (!task || isUpdatingTitle) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) {
+      setError('عنوان المهمة لا يمكن أن يكون فارغاً');
+      return;
+    }
+    setIsUpdatingTitle(true);
+    try {
+      const response = await fetch(getApiUrl(`tasks/${task.TaskID}/title`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Title: trimmed })
+      });
+      if (response.ok) {
+        await fetchAllDetails();
+        setIsEditingTitle(false);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.message || 'فشل في تحديث عنوان المهمة');
+      }
+    } catch (error) {
+      console.error('Failed to update task title:', error);
+      setError('حدث خطأ أثناء تحديث عنوان المهمة');
+    } finally {
+      setIsUpdatingTitle(false);
+    }
+  };
+
   useEffect(() => { 
     fetchAllDetails();
     fetchCategories();
@@ -307,7 +339,47 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md max-w-4xl mx-auto">
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-4xl font-bold text-content mb-2">{task.Title}</h1>
+          {isEditingTitle ? (
+            <input
+              type="text"
+              autoFocus
+              value={titleInput}
+              onChange={(e) => setTitleInput(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  await handleUpdateTaskTitle(titleInput);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setIsEditingTitle(false);
+                  setTitleInput(task.Title || '');
+                }
+              }}
+              onBlur={() => {
+                if (isUpdatingTitle) return;
+                const current = (task.Title || '').trim();
+                const next = titleInput.trim();
+                if (next && next !== current) {
+                  void handleUpdateTaskTitle(titleInput);
+                } else {
+                  setIsEditingTitle(false);
+                  setTitleInput(task.Title || '');
+                }
+              }}
+              className="text-4xl font-bold text-content mb-2 bg-transparent border-b border-primary focus:outline-none focus:border-primary/80"
+            />
+          ) : (
+            <h1
+              className="text-4xl font-bold text-content mb-2 cursor-text"
+              onClick={() => {
+                setIsEditingTitle(true);
+                setTitleInput(task.Title || '');
+              }}
+              title="انقر لتعديل عنوان المهمة (Enter للحفظ، Esc للإلغاء)"
+            >
+              {task.Title}
+            </h1>
+          )}
           <div className="flex flex-wrap items-center gap-4 text-content-secondary mb-6">
             <span>
               المنشيء: {task.CreatedByName || task.CreatedBy}

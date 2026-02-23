@@ -54,14 +54,12 @@ exports.createSubtask = async (req, res) => {
     return res.status(400).json({ message: 'TaskID, Title, and CreatedBy are required.' });
   }
 
-  // إذا لم يتم تحديد شخص للإسناد، يتم إسنادها للمنشئ
   const finalAssignedTo = AssignedTo || CreatedBy;
-  // لا نملأ ActedBy إلا عند وجود تفويض نشط
   let actorUserId = null;
   if (ActedBy && ActedBy !== CreatedBy) {
     try {
       const { hasActiveDelegation } = require('../utils/delegationUtils');
-      const active = await hasActiveDelegation(CreatedBy, ActedBy);
+      const active = await hasActiveDelegation(pool, CreatedBy, ActedBy);
       if (active) {
         actorUserId = ActedBy;
       }
@@ -94,7 +92,6 @@ exports.createSubtask = async (req, res) => {
 
     const newSubtask = result.recordset[0];
 
-    // إضافة إشعار إذا تم إسناد المهمة الفرعية لشخص آخر غير المنشئ
     if (finalAssignedTo && finalAssignedTo !== CreatedBy) {
       await pool.request()
         .input('TaskID', sql.Int, TaskID)
@@ -103,7 +100,8 @@ exports.createSubtask = async (req, res) => {
         .query(`
           INSERT INTO TaskAssignmentNotifications 
           (TaskID, AssignedToUserID, AssignedByUserID)
-          VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+          SELECT @TaskID, @AssignedToUserID, @AssignedByUserID
+          WHERE EXISTS (SELECT 1 FROM Users WHERE UserID = @AssignedByUserID)
         `);
     }
 
@@ -167,16 +165,16 @@ exports.assignSubtask = async (req, res) => {
       .input('AssignedTo', sql.NVarChar, assignedToUserId || null)
       .query('UPDATE Subtasks SET AssignedTo = @AssignedTo WHERE SubtaskID = @SubtaskID');
 
-    // إضافة إشعار إذا تم إسناد المهمة لشخص جديد
-    if (assignedToUserId && assignedToUserId !== previousAssignedTo) {
+    if (assignedToUserId && assignedToUserId !== previousAssignedTo && assignedByUserId) {
       await pool.request()
         .input('TaskID', sql.Int, subtask.TaskID)
         .input('AssignedToUserID', sql.NVarChar, assignedToUserId)
-        .input('AssignedByUserID', sql.NVarChar, assignedByUserId || 'system')
+        .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
         .query(`
           INSERT INTO TaskAssignmentNotifications 
           (TaskID, AssignedToUserID, AssignedByUserID)
-          VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+          SELECT @TaskID, @AssignedToUserID, @AssignedByUserID
+          WHERE EXISTS (SELECT 1 FROM Users WHERE UserID = @AssignedByUserID)
         `);
     }
 

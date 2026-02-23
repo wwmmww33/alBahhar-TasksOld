@@ -7,6 +7,8 @@ router.get('/subtasks', calendarController.getDepartmentCalendarSubtasks);
 
 router.get('/personal-events', calendarController.getPersonalEvents);
 router.post('/personal-events', calendarController.createPersonalEvent);
+router.put('/personal-events/:id', calendarController.updatePersonalEvent);
+router.delete('/personal-events/:id', calendarController.deletePersonalEvent);
 
 router.get('/comments', calendarController.getCalendarComments);
 

@@ -44,6 +44,18 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
   const [viewFilter, setViewFilter] = useState<ViewFilter>('both');
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [viewLayout, setViewLayout] = useState<ViewLayout>('grid');
+  const [newEventTitle, setNewEventTitle] = useState('');
+  const [newEventDate, setNewEventDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  });
+  const [submittingEvent, setSubmittingEvent] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDate, setEditDate] = useState('');
 
   const openTaskInNewTab = (taskId: number) => {
     window.open(`/task/${taskId}`, '_blank', 'noopener,noreferrer');
@@ -261,6 +273,137 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
     });
   }, [viewMode, currentDate]);
 
+  const sortedPersonalEvents = useMemo(() => {
+    const copy = [...personalEvents];
+    copy.sort((a, b) => {
+      const ad = new Date(a.EventDate).getTime();
+      const bd = new Date(b.EventDate).getTime();
+      if (ad === bd) return a.EventID - b.EventID;
+      return ad - bd;
+    });
+    return copy;
+  }, [personalEvents]);
+
+  const handleCreatePersonalEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEventTitle.trim()) return;
+    setSubmittingEvent(true);
+    try {
+      const resp = await fetch('/api/calendar/personal-events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.UserID,
+          title: newEventTitle.trim(),
+          eventDate: newEventDate,
+        }),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        throw new Error(`فشل إضافة الحدث الخاص (${resp.status}). ${txt}`);
+      }
+      const created: PersonalEventItem = await resp.json();
+      setPersonalEvents(prev => {
+        const merged = [...prev, created];
+        merged.sort((a, b) => {
+          const ad = new Date(a.EventDate).getTime();
+          const bd = new Date(b.EventDate).getTime();
+          if (ad === bd) return a.EventID - b.EventID;
+          return ad - bd;
+        });
+        return merged;
+      });
+      setNewEventTitle('');
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      setNewEventDate(`${y}-${m}-${dd}`);
+    } catch (err: any) {
+      alert(err?.message || 'فشل إضافة الحدث الخاص.');
+    } finally {
+      setSubmittingEvent(false);
+    }
+  };
+
+  const startEditEvent = (ev: PersonalEventItem) => {
+    setEditingEventId(ev.EventID);
+    setEditTitle(ev.Title);
+    const d = new Date(ev.EventDate);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    setEditDate(`${y}-${m}-${dd}`);
+  };
+
+  const handleUpdatePersonalEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEventId) return;
+    if (!editTitle.trim()) return;
+    setSubmittingEvent(true);
+    try {
+      const resp = await fetch(`/api/calendar/personal-events/${editingEventId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.UserID,
+          title: editTitle.trim(),
+          eventDate: editDate,
+        }),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        throw new Error(`فشل تعديل الحدث الخاص (${resp.status}). ${txt}`);
+      }
+      const updated: PersonalEventItem = await resp.json();
+      setPersonalEvents(prev => {
+        const mapped = prev.map(ev => (ev.EventID === updated.EventID ? updated : ev));
+        mapped.sort((a, b) => {
+          const ad = new Date(a.EventDate).getTime();
+          const bd = new Date(b.EventDate).getTime();
+          if (ad === bd) return a.EventID - b.EventID;
+          return ad - bd;
+        });
+        return mapped;
+      });
+      setEditingEventId(null);
+      setEditTitle('');
+      setEditDate('');
+    } catch (err: any) {
+      alert(err?.message || 'فشل تعديل الحدث الخاص.');
+    } finally {
+      setSubmittingEvent(false);
+    }
+  };
+
+  const handleDeletePersonalEvent = async (id: number) => {
+    const confirmDelete = window.confirm('هل أنت متأكد من حذف هذا الحدث الخاص؟');
+    if (!confirmDelete) return;
+    setSubmittingEvent(true);
+    try {
+      const params = new URLSearchParams({
+        userId: String(currentUser.UserID),
+      });
+      const resp = await fetch(`/api/calendar/personal-events/${id}?${params.toString()}`, {
+        method: 'DELETE',
+      });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        throw new Error(`فشل حذف الحدث الخاص (${resp.status}). ${txt}`);
+      }
+      setPersonalEvents(prev => prev.filter(ev => ev.EventID !== id));
+      if (editingEventId === id) {
+        setEditingEventId(null);
+        setEditTitle('');
+        setEditDate('');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'فشل حذف الحدث الخاص.');
+    } finally {
+      setSubmittingEvent(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -429,6 +572,7 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
                   for (const d of dateRange) {
                     cells.push({ key: d.key, date: d.date });
                   }
+                  const todayKey = toLocalYMD(new Date());
                   return cells.map((cell, idx) => {
                     if (!cell.date) {
                       return (
@@ -439,6 +583,7 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
                       );
                     }
                     const key = toLocalYMD(cell.date);
+                    const isToday = key === todayKey;
                     const sharedForDay = itemsByDay[key] || [];
                     const personalForDay = personalByDay[key] || [];
                     const commentsForDay = commentsByDay[key] || [];
@@ -452,32 +597,47 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
                     return (
                       <div
                         key={cell.key}
-                        className={`h-28 border border-content/10 p-1 flex flex-col ${
-                          hasEvents
-                            ? 'bg-white dark:bg-gray-900'
-                            : 'bg-white/60 dark:bg-gray-900/40'
+                        className={`h-28 border p-1 flex flex-col ${
+                          isToday
+                            ? 'bg-yellow-100 dark:bg-yellow-900 border-yellow-400 dark:border-yellow-500'
+                            : hasEvents
+                              ? 'bg-white dark:bg-gray-900 border-content/10'
+                              : 'bg-white/60 dark:bg-gray-900/40 border-content/10'
                         }`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-semibold">{cell.date.getDate()}</span>
+                          <span
+                            className={`text-xs font-semibold ${
+                              isToday
+                                ? 'bg-primary text-white rounded-full px-1'
+                                : ''
+                            }`}
+                          >
+                            {cell.date.getDate()}
+                          </span>
                           {hasEvents && (
                             <span className="w-2 h-2 rounded-full bg-primary inline-block" />
                           )}
                         </div>
-                        <div className="space-y-0.5 overflow-hidden">
+                        <div className="space-y-0.5 overflow-y-auto">
                           {visibleShared.slice(0, 2).map((item) => (
                             <button
                               key={item.SubtaskID}
                               type="button"
                               onClick={() => openTaskInNewTab(item.TaskID)}
-                              className="text-[10px] truncate text-right text-blue-800 dark:text-blue-200 hover:underline w-full text-right"
+                              className="text-[10px] text-right text-blue-800 dark:text-blue-200 hover:underline w-full text-right"
                             >
-                              {item.SubtaskTitle}
-                              {item.AssignedToName ? ` (${item.AssignedToName})` : ''}
+                              <div>
+                                {item.SubtaskTitle}
+                                {item.AssignedToName ? ` (${item.AssignedToName})` : ''}
+                              </div>
+                              <div className="text-[9px] text-blue-600 dark:text-blue-300">
+                                ضمن: {item.TaskTitle}
+                              </div>
                             </button>
                           ))}
                           {visiblePersonal.slice(0, 1).map((ev) => (
-                            <div key={ev.EventID} className="text-[10px] truncate text-right">
+                            <div key={ev.EventID} className="text-[10px] text-right">
                               <span className="text-green-800 dark:text-green-200">{ev.Title}</span>
                             </div>
                           ))}
@@ -486,9 +646,12 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
                               key={comment.CommentID}
                               type="button"
                               onClick={() => openTaskInNewTab(comment.TaskID)}
-                              className="text-[10px] truncate text-right text-purple-800 dark:text-purple-200 hover:underline w-full text-right"
+                              className="text-[10px] text-right text-purple-800 dark:text-purple-200 hover:underline w-full text-right"
                             >
-                              {comment.Content}
+                              <div>{comment.Content}</div>
+                              <div className="text-[9px] text-content-secondary">
+                                ضمن: {comment.TaskTitle}
+                              </div>
                             </button>
                           ))}
                           {hasEvents &&
@@ -519,18 +682,28 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
                   visibleShared.length > 0 ||
                   visiblePersonal.length > 0 ||
                   visibleComments.length > 0;
+                const todayKey = toLocalYMD(new Date());
+                const isToday = d.key === todayKey;
 
                 return (
                   <div
                     key={d.key}
                     className={`border rounded-lg p-3 ${
-                      hasEvents
-                        ? 'bg-white dark:bg-gray-900 border-blue-300 dark:border-blue-700'
-                        : 'bg-white/60 dark:bg-gray-900/40 border-content/10'
+                      isToday
+                        ? 'bg-yellow-100 dark:bg-yellow-900 border-yellow-400 dark:border-yellow-500'
+                        : hasEvents
+                          ? 'bg-white dark:bg-gray-900 border-blue-300 dark:border-blue-700'
+                          : 'bg-white/60 dark:bg-gray-900/40 border-content/10'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-sm font-semibold text-right">{d.label}</div>
+                      <div
+                        className={`text-sm font-semibold text-right ${
+                          isToday ? 'text-primary' : ''
+                        }`}
+                      >
+                        {d.label}
+                      </div>
                       {!hasEvents && (
                         <div className="text-xs text-content-secondary">لا توجد أحداث في هذا اليوم.</div>
                       )}
@@ -584,6 +757,137 @@ const CalendarPage = ({ currentUser }: CalendarPageProps) => {
               })}
             </div>
           )}
+
+          <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="border rounded-lg p-4 bg-white/80 dark:bg-gray-900/80 border-content/10">
+              <h2 className="text-lg font-semibold mb-3 text-right">إضافة حدث خاص</h2>
+              <form onSubmit={handleCreatePersonalEvent} className="space-y-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm text-right">عنوان الحدث</label>
+                  <input
+                    type="text"
+                    value={newEventTitle}
+                    onChange={(e) => setNewEventTitle(e.target.value)}
+                    className="border border-content/20 rounded px-3 py-2 text-sm text-right bg-white dark:bg-gray-800"
+                    disabled={submittingEvent}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm text-right">تاريخ الحدث</label>
+                  <input
+                    type="date"
+                    value={newEventDate}
+                    onChange={(e) => setNewEventDate(e.target.value)}
+                    className="border border-content/20 rounded px-3 py-2 text-sm text-right bg-white dark:bg-gray-800"
+                    disabled={submittingEvent}
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={submittingEvent || !newEventTitle.trim()}
+                    className="px-4 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    حفظ الحدث
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className="border rounded-lg p-4 bg-white/80 dark:bg-gray-900/80 border-content/10">
+              <h2 className="text-lg font-semibold mb-3 text-right">إدارة الأحداث الخاصة</h2>
+              {sortedPersonalEvents.length === 0 ? (
+                <div className="text-sm text-content-secondary text-right">
+                  لا توجد أحداث خاصة حالياً في الفترة المعروضة.
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto">
+                  {sortedPersonalEvents.map((ev) =>
+                    editingEventId === ev.EventID ? (
+                      <form
+                        key={ev.EventID}
+                        onSubmit={handleUpdatePersonalEvent}
+                        className="flex flex-col gap-2 border rounded-md p-2 bg-content/5"
+                      >
+                        <input
+                          type="text"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          className="border border-content/20 rounded px-2 py-1 text-sm text-right bg-white dark:bg-gray-800"
+                          disabled={submittingEvent}
+                        />
+                        <input
+                          type="date"
+                          value={editDate}
+                          onChange={(e) => setEditDate(e.target.value)}
+                          className="border border-content/20 rounded px-2 py-1 text-sm text-right bg-white dark:bg-gray-800"
+                          disabled={submittingEvent}
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEventId(null);
+                              setEditTitle('');
+                              setEditDate('');
+                            }}
+                            className="px-3 py-1 rounded-md border border-content/30 text-sm"
+                            disabled={submittingEvent}
+                          >
+                            إلغاء
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={submittingEvent || !editTitle.trim()}
+                            className="px-3 py-1 rounded-md bg-primary text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            حفظ
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div
+                        key={ev.EventID}
+                        className="flex items-center justify-between border border-content/10 rounded-md px-3 py-2 text-sm bg-white/70 dark:bg-gray-800/70"
+                      >
+                        <div className="flex-1 text-right">
+                          <div className="font-semibold text-green-800 dark:text-green-200">
+                            {ev.Title}
+                          </div>
+                          <div className="text-xs text-content-secondary">
+                            {new Date(ev.EventDate).toLocaleDateString('ar-EG', {
+                              weekday: 'long',
+                              day: 'numeric',
+                              month: 'long',
+                              year: 'numeric',
+                            })}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 ml-3">
+                          <button
+                            type="button"
+                            onClick={() => startEditEvent(ev)}
+                            className="px-2 py-1 text-xs rounded-md border border-primary text-primary hover:bg-primary/10"
+                            disabled={submittingEvent}
+                          >
+                            تعديل
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePersonalEvent(ev.EventID)}
+                            className="px-2 py-1 text-xs rounded-md border border-red-500 text-red-600 hover:bg-red-500/10"
+                            disabled={submittingEvent}
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </>
       )}
     </div>
