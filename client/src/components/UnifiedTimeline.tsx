@@ -1,5 +1,5 @@
 // src/components/UnifiedTimeline.tsx
-import { Check, Square, Trash2, UserPlus, Calendar, Clock, MessageCircle, CheckSquare } from 'lucide-react';
+import { Check, Square, Trash2, UserPlus, Calendar, Clock, MessageCircle, CheckSquare, Users } from 'lucide-react';
 import React, { useState, useMemo } from 'react';
 import type { Subtask, User, CurrentUser } from '../types';
 import { useNotification } from '../contexts/NotificationContext';
@@ -111,6 +111,15 @@ const UnifiedTimeline = ({
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentValue, setEditingCommentValue] = useState('');
 
+  // Bulk Assign State
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [selectedSubtaskForBulk, setSelectedSubtaskForBulk] = useState<Subtask | null>(null);
+  const [bulkSelectedUsers, setBulkSelectedUsers] = useState<string[]>([]);
+
+  // New Task Bulk State
+  const [isNewTaskBulkModalOpen, setIsNewTaskBulkModalOpen] = useState(false);
+  const [newSubtaskBulkUsers, setNewSubtaskBulkUsers] = useState<string[]>([]);
+
   const actingUserId = getActiveUserId(currentUser.UserID);
   const canManageAssignments = currentUser.IsAdmin || (task && actingUserId === task.CreatedBy);
   const canAddSubtasks = canManageAssignments || subtasks.some(st => st.AssignedTo === actingUserId);
@@ -146,6 +155,32 @@ const UnifiedTimeline = ({
   const handleAddSubtask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSubtaskTitle.trim()) return;
+
+    if (assignTo === 'bulk') {
+        if (newSubtaskBulkUsers.length === 0) {
+            alert("الرجاء اختيار مستخدم واحد على الأقل");
+            return;
+        }
+        for (const userId of newSubtaskBulkUsers) {
+             await fetch('/api/subtasks', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                TaskID: taskId, Title: newSubtaskTitle, CreatedBy: actingUserId, ActedBy: currentUser.UserID,
+                DueDate: newSubtaskDueDate || null, AssignedTo: userId,
+                ShowInCalendar: showInCalendar
+              }),
+            });
+        }
+        window.dispatchEvent(new CustomEvent('calendar:subtask:created', { detail: { ShowInCalendar: showInCalendar, DueDate: newSubtaskDueDate } }));
+        
+        setNewSubtaskTitle(''); setNewSubtaskDueDate(getTodayString()); setAssignTo(''); setShowInCalendar(false);
+        setNewSubtaskBulkUsers([]);
+        onSubtaskUpdate();
+        refreshTasks();
+        refreshNotifications();
+        return;
+    }
+
     const resp = await fetch('/api/subtasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -187,6 +222,16 @@ const UnifiedTimeline = ({
   };
 
   const handleAssign = async (subtaskId: number, assignedTo: string) => {
+    if (assignedTo === 'bulk') {
+        const subtask = subtasks.find(s => s.SubtaskID === subtaskId);
+        if (subtask) {
+            setSelectedSubtaskForBulk(subtask);
+            setBulkSelectedUsers(subtask.AssignedTo ? [subtask.AssignedTo] : []);
+            setIsBulkModalOpen(true);
+        }
+        return;
+    }
+
     await fetch(`/api/subtasks/${subtaskId}/assign`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -195,6 +240,42 @@ const UnifiedTimeline = ({
     onSubtaskUpdate();
     refreshTasks();
     refreshNotifications();
+  };
+
+  const submitBulkAssign = async () => {
+      if (!selectedSubtaskForBulk) return;
+      if (bulkSelectedUsers.length === 0) {
+          alert("الرجاء اختيار مستخدم واحد على الأقل");
+          return;
+      }
+      
+      try {
+        const resp = await fetch(`/api/subtasks/${selectedSubtaskForBulk.SubtaskID}/bulk-assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignedToUserIds: bulkSelectedUsers, assignedByUserId: actingUserId }),
+        });
+        
+        if (resp.ok) {
+            onSubtaskUpdate();
+            refreshTasks();
+            refreshNotifications();
+            setIsBulkModalOpen(false);
+            setSelectedSubtaskForBulk(null);
+            setBulkSelectedUsers([]);
+        } else {
+            alert("حدث خطأ أثناء الإسناد المتعدد");
+        }
+      } catch (e) {
+          console.error(e);
+          alert("حدث خطأ في الاتصال");
+      }
+  };
+
+  const toggleUserSelection = (userId: string) => {
+      setBulkSelectedUsers(prev => 
+        prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+      );
   };
 
   // حفظ تفاصيل المهمة الفرعية (العنوان / تاريخ الاستحقاق)
@@ -425,13 +506,27 @@ const UnifiedTimeline = ({
                   value={subtask.AssignedTo || ''}
                   onChange={(e) => handleAssign(subtask.SubtaskID, e.target.value)}
                   disabled={!canManageAssignments}
-                  className="bg-transparent text-xs focus:outline-none disabled:opacity-70 dark:text-gray-300"
+                  className="bg-transparent text-xs focus:outline-none disabled:opacity-70 dark:text-gray-300 max-w-[120px]"
                 >
                   <option value="">غير مسندة</option>
+                  <option value="bulk" className="font-bold text-primary">👥 إسناد متعدد...</option>
                   {users.map(user => (
                     <option key={user.UserID} value={user.UserID}>{user.FullName}</option>
                   ))}
                 </select>
+                {canManageAssignments && (
+                  <button
+                    onClick={() => {
+                      setSelectedSubtaskForBulk(subtask);
+                      setBulkSelectedUsers(subtask.AssignedTo ? [subtask.AssignedTo] : []);
+                      setIsBulkModalOpen(true);
+                    }}
+                    className="p-1 hover:bg-primary/10 rounded-full text-primary transition-colors"
+                    title="إسناد متعدد / تكرار المهمة"
+                  >
+                    <Users size={14} />
+                  </button>
+                )}
               </div>
               
               {(subtask.CreatedByName || subtask.CreatedBy) && (
@@ -651,7 +746,70 @@ const UnifiedTimeline = ({
 
   return (
     <div className="mt-8">
-      
+      {/* Bulk Assign Modal */}
+      {isBulkModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-bkg p-6 rounded-lg shadow-lg w-96 max-w-full">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <Users size={20} />
+              إسناد متعدد / تكرار المهمة
+            </h3>
+            <p className="text-sm text-content-secondary mb-4">
+              اختر الموظفين الذين تريد إسناد المهمة لهم. سيتم تكرار المهمة لكل موظف إضافي.
+            </p>
+            <div className="max-h-60 overflow-y-auto space-y-2 mb-4 border border-content/10 p-2 rounded">
+              {users.map(user => (
+                <label key={user.UserID} className="flex items-center gap-2 cursor-pointer hover:bg-content/5 p-2 rounded transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={bulkSelectedUsers.includes(user.UserID)}
+                    onChange={() => toggleUserSelection(user.UserID)}
+                    className="w-4 h-4 text-primary rounded focus:ring-primary"
+                  />
+                  <span className="text-sm">{user.FullName}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setIsBulkModalOpen(false)} className="px-4 py-2 text-content-secondary hover:bg-content/10 rounded">إلغاء</button>
+              <button onClick={submitBulkAssign} className="px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark shadow-sm">حفظ وتكرار</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Task Bulk Modal */}
+      {isNewTaskBulkModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-bkg p-6 rounded-lg shadow-lg w-96 max-w-full">
+                  <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                      <Users size={20} />
+                      إسناد متعدد (مهمة جديدة)
+                  </h3>
+                  <p className="text-sm text-content-secondary mb-4">
+                      اختر الموظفين الذين تريد إسناد المهمة لهم. سيتم إنشاء مهمة فرعية لكل موظف.
+                  </p>
+                  <div className="max-h-60 overflow-y-auto space-y-2 mb-4 border border-content/10 p-2 rounded">
+                      {users.map(user => (
+                          <label key={user.UserID} className="flex items-center gap-2 cursor-pointer hover:bg-content/5 p-2 rounded transition-colors">
+                              <input 
+                                type="checkbox" 
+                                checked={newSubtaskBulkUsers.includes(user.UserID)} 
+                                onChange={() => setNewSubtaskBulkUsers(prev => prev.includes(user.UserID) ? prev.filter(id => id !== user.UserID) : [...prev, user.UserID])}
+                                className="w-4 h-4 text-primary rounded focus:ring-primary"
+                              />
+                              <span className="text-sm">{user.FullName}</span>
+                          </label>
+                      ))}
+                  </div>
+                  <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => { setIsNewTaskBulkModalOpen(false); setAssignTo(''); setNewSubtaskBulkUsers([]); }} className="px-4 py-2 text-content-secondary hover:bg-content/10 rounded">إلغاء</button>
+                  <button type="button" onClick={() => { setIsNewTaskBulkModalOpen(false); setAssignTo('bulk'); }} className="px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark shadow-sm">تأكيد الاختيار ({newSubtaskBulkUsers.length})</button>
+              </div>
+              </div>
+          </div>
+      )}
+
       {/* نموذج إضافة مهمة فرعية */}
       {canAddSubtasks && (
         <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
@@ -671,8 +829,8 @@ const UnifiedTimeline = ({
           </div>
           
           {showSubtaskForm && (
-          <form onSubmit={handleAddSubtask} className="grid grid-cols-1 md:grid-cols-6 gap-2">
-            <div className="md:col-span-3">
+          <form onSubmit={handleAddSubtask} className="grid grid-cols-1 md:grid-cols-12 gap-2">
+            <div className="md:col-span-5">
               <input
                 type="text"
                 value={newSubtaskTitle}
@@ -682,36 +840,60 @@ const UnifiedTimeline = ({
                 className="w-full p-2 border rounded-md bg-bkg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
               />
             </div>
-            <input
-              type="date"
-              value={newSubtaskDueDate}
-              onChange={(e) => setNewSubtaskDueDate(e.target.value)}
-              className="p-2 border rounded-md bg-bkg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-            />
-            <select
-              value={assignTo}
-              onChange={e => setAssignTo(e.target.value)}
-              className="p-2 border rounded-md bg-white dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-            >
-              <option value="">إسناد لـ: (نفسي)</option>
-              {users.map(user => (
-                <option key={user.UserID} value={user.UserID}>{user.FullName}</option>
-              ))}
-            </select>
-            <label className="flex items-center gap-2 text-sm px-2">
+            <div className="md:col-span-2">
               <input
-                type="checkbox"
-                checked={showInCalendar}
-                onChange={(e) => setShowInCalendar(e.target.checked)}
+                type="date"
+                value={newSubtaskDueDate}
+                onChange={(e) => setNewSubtaskDueDate(e.target.value)}
+                className="w-full p-2 border rounded-md bg-bkg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
               />
-              إظهار في التقويم
-            </label>
-            <button
-              type="submit"
-              className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary-dark"
-            >
-              إضافة
-            </button>
+            </div>
+            <div className="md:col-span-3 flex items-center gap-1">
+              <select
+                value={assignTo}
+                onChange={e => {
+                    if (e.target.value === 'bulk') {
+                        setIsNewTaskBulkModalOpen(true);
+                        setAssignTo('bulk');
+                    } else {
+                        setAssignTo(e.target.value);
+                    }
+                }}
+                className="p-2 border rounded-md bg-white dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 w-full"
+              >
+                <option value="">إسناد لـ: (نفسي)</option>
+                <option value="bulk" className="font-bold text-primary">👥 إسناد متعدد...</option>
+                {users.map(user => (
+                  <option key={user.UserID} value={user.UserID}>{user.FullName}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => { setIsNewTaskBulkModalOpen(true); setAssignTo('bulk'); }}
+                className="p-2 bg-primary/10 hover:bg-primary/20 rounded-md text-primary transition-colors flex-shrink-0"
+                title="إسناد متعدد"
+              >
+                <Users size={20} />
+              </button>
+            </div>
+            <div className="md:col-span-2 flex items-center justify-center">
+              <label className="flex items-center gap-2 text-sm px-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showInCalendar}
+                  onChange={(e) => setShowInCalendar(e.target.checked)}
+                />
+                إظهار في التقويم
+              </label>
+            </div>
+            <div className="md:col-span-12 flex justify-end">
+              <button
+                type="submit"
+                className="bg-primary text-white px-6 py-2 rounded-md hover:bg-primary-dark w-full md:w-auto"
+              >
+                إضافة
+              </button>
+            </div>
           </form>
           )}
         </div>

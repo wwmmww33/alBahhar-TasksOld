@@ -70,7 +70,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
         const [subtasksRes, commentsRes, usersRes] = await Promise.all([
           fetch(getApiUrl(`tasks/${taskId}/subtasks?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)),
           fetch(getApiUrl(`tasks/${taskId}/comments?userId=${actingUserId}&isAdmin=${currentUser.IsAdmin}`)),
-          fetch(getApiUrl(`tasks/department/${taskData.DepartmentID}/users`)),
+          fetch(getApiUrl(`tasks/department/${taskData.DepartmentID}/users`))
         ]);
         
         // التحقق من صلاحية الوصول للمهام الفرعية
@@ -112,10 +112,15 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     if (!task || isUpdatingCategory) return;
     setIsUpdatingCategory(true);
     try {
+      const actingUserId = getActiveUserId(currentUser.UserID);
       const response = await fetch(getApiUrl(`tasks/${task.TaskID}/category`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ CategoryID: categoryId })
+        body: JSON.stringify({ 
+          CategoryID: categoryId,
+          userId: actingUserId,
+          isAdmin: currentUser.IsAdmin
+        })
       });
       
       if (response.ok) {
@@ -138,12 +143,15 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     if (!task || isUpdatingURL) return;
     setIsUpdatingURL(true);
     try {
+      const actingUserId = getActiveUserId(currentUser.UserID);
       const response = await fetch(getApiUrl(`tasks/${task.TaskID}/url`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: newUrl,
-          Description: typeof newDescription !== 'undefined' ? newDescription : undefined
+          Description: typeof newDescription !== 'undefined' ? newDescription : undefined,
+          userId: actingUserId,
+          isAdmin: currentUser.IsAdmin
         })
       });
       if (response.ok) {
@@ -165,12 +173,15 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     if (!task || isUpdatingDescription) return;
     setIsUpdatingDescription(true);
     try {
+      const actingUserId = getActiveUserId(currentUser.UserID);
       const response = await fetch(getApiUrl(`tasks/${task.TaskID}/url`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: (task as any)?.URL || null,
-          Description: newDescription
+          Description: newDescription,
+          userId: actingUserId,
+          isAdmin: currentUser.IsAdmin
         })
       });
       if (response.ok) {
@@ -197,10 +208,15 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
     }
     setIsUpdatingTitle(true);
     try {
+      const actingUserId = getActiveUserId(currentUser.UserID);
       const response = await fetch(getApiUrl(`tasks/${task.TaskID}/title`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ Title: trimmed })
+        body: JSON.stringify({ 
+          Title: trimmed,
+          userId: actingUserId,
+          isAdmin: currentUser.IsAdmin
+        })
       });
       if (response.ok) {
         await fetchAllDetails();
@@ -309,7 +325,10 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       const response = await fetch(getApiUrl(`tasks/${taskId}`), {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: getActiveUserId(currentUser.UserID) })
+        body: JSON.stringify({ 
+          userId: getActiveUserId(currentUser.UserID),
+          isAdmin: currentUser.IsAdmin
+        })
       });
       
       if (response.ok) {
@@ -332,7 +351,11 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   if (!task) return <p className="text-center p-8">لم يتم العثور على المهمة.</p>;
 
   const actingUserId = getActiveUserId(currentUser.UserID);
+  
+  // التحقق من صلاحية التعديل (المنشئ، المدير، أو المسند إليهم)
+  const isAssignee = task.AssignedTo === actingUserId || subtasks.some(st => st.AssignedTo === actingUserId);
   const canCloseTask = actingUserId === task.CreatedBy || currentUser.IsAdmin;
+  const canEditTaskDetails = canCloseTask || isAssignee;
   const canDeleteTask = actingUserId === task.CreatedBy;
 
   return (
@@ -439,7 +462,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
                       <ExternalLink size={14} />
                       عرض معلومات التصنيف
                     </Link>
-                    {canCloseTask && (
+                    {canEditTaskDetails && (
                       <button
                         onClick={() => {
                           setIsEditingCategory(true);
@@ -454,7 +477,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
                 ) : (
                   <>
                     <span className="text-content-secondary italic">بدون تصنيف</span>
-                    {canCloseTask && (
+                    {canEditTaskDetails && (
                       <button
                         onClick={() => {
                           setIsEditingCategory(true);
@@ -512,7 +535,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
                 ) : (
                   <span className="text-content-secondary italic">لا يوجد رابط</span>
                 )}
-                {canCloseTask && (
+                {canEditTaskDetails && (
                   <button
                     onClick={() => { setIsEditingURL(true); setUrlInput((task as any)?.URL || ''); }}
                     className="text-sm text-primary hover:underline"
@@ -630,6 +653,7 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
       
 
       <hr className="my-8 border-content/10" />
+
       <UnifiedTimeline 
         taskId={taskId!}
         subtasks={subtasks}

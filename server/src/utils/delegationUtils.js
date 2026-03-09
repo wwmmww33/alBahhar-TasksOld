@@ -138,6 +138,7 @@ async function getTasksQueryWithDelegation(pool, userId, isAdmin) {
       WHERE t.Status NOT IN ('completed', 'cancelled')
         AND (
           t.CreatedBy = '${userId}' 
+          OR t.AssignedTo = '${userId}'
           OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
           ${delegationCondition}
         )
@@ -156,6 +157,7 @@ async function getTasksQueryWithDelegation(pool, userId, isAdmin) {
       WHERE t.Status NOT IN ('completed', 'cancelled')
         AND (
           t.CreatedBy = '${userId}' 
+          OR t.AssignedTo = '${userId}'
           OR EXISTS (SELECT 1 FROM Subtasks s_inner WHERE s_inner.TaskID = t.TaskID AND s_inner.AssignedTo = '${userId}')
         )
       ORDER BY t.CreatedAt DESC
@@ -169,7 +171,7 @@ async function checkTaskAccess(pool, taskId, userId, isAdmin, requiredPermission
     taskRequest.input('taskId', sql.Int, taskId);
     
     const taskResult = await taskRequest.query(`
-      SELECT TaskID, CreatedBy, Title
+      SELECT TaskID, CreatedBy, Title, AssignedTo
       FROM Tasks
       WHERE TaskID = @taskId
     `);
@@ -186,6 +188,13 @@ async function checkTaskAccess(pool, taskId, userId, isAdmin, requiredPermission
     
     if (task.CreatedBy === userId) {
       return { hasAccess: true, accessType: 'owner', task };
+    }
+
+    if (task.AssignedTo === userId) {
+      if (requiredPermission === 'view' || requiredPermission === 'edit') {
+        return { hasAccess: true, accessType: 'assigned', task };
+      }
+      return { hasAccess: false, reason: 'صلاحية محدودة - عرض وتعديل فقط' };
     }
     
     const hasDelegationPermission = await checkDelegationPermission(pool, task.CreatedBy, userId, requiredPermission);
@@ -204,11 +213,11 @@ async function checkTaskAccess(pool, taskId, userId, isAdmin, requiredPermission
     `);
     
     if (subtaskResult.recordset[0].AssignedSubtasks > 0) {
-      // المستخدم مُسند إليه مهام فرعية، له صلاحية العرض فقط
-      if (requiredPermission === 'view') {
+      // المستخدم مُسند إليه مهام فرعية
+      if (requiredPermission === 'view' || requiredPermission === 'edit') {
         return { hasAccess: true, accessType: 'assigned', task };
       } else {
-        return { hasAccess: false, reason: 'صلاحية محدودة - عرض فقط' };
+        return { hasAccess: false, reason: 'صلاحية محدودة - عرض وتعديل فقط' };
       }
     }
     

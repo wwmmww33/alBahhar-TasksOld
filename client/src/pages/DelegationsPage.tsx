@@ -1,8 +1,13 @@
 // src/pages/DelegationsPage.tsx
 import React from 'react';
 import DelegationManagement from '../components/DelegationManagement';
+import type { CurrentUser } from '../types';
 
-const DelegationsPage: React.FC = () => {
+interface Props {
+  currentUser: CurrentUser;
+}
+
+const DelegationsPage: React.FC<Props> = ({ currentUser }) => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">

@@ -3,6 +3,12 @@ const sql = require('mssql');
 const { getTasksQueryWithDelegation, checkTaskAccess, checkDelegationPermission, hasActiveDelegation } = require('../utils/delegationUtils');
 const encryptionConfig = require('../config/encryption.config');
 
+// التراجع عن دفعة نقل (إرجاع الإسناد السابق) - REMOVED
+// exports.revertTaskTransferBatch was here
+
+// جلب سجل دفعات النقل للمستخدم (المرسل) - REMOVED
+// exports.getUserTransferBatches was here
+
 exports.getAllTasks = async (req, res) => {
     const pool = req.app.locals.db;
     const { userId, isAdmin } = req.query;
@@ -96,25 +102,60 @@ exports.assignTask = async (req, res) => {
         return res.status(400).json({ message: 'assignedToUserId field is required.' });
     }
 
+    const transaction = new sql.Transaction(pool);
+
     try {
-        const taskResult = await pool.request()
+        await transaction.begin();
+
+        const taskResult = await new sql.Request(transaction)
             .input('TaskID', sql.Int, id)
             .query('SELECT AssignedTo FROM Tasks WHERE TaskID = @TaskID');
         
         if (taskResult.recordset.length === 0) {
+            await transaction.rollback();
             return res.status(404).json({ message: 'Task not found' });
         }
 
         const task = taskResult.recordset[0];
         const previousAssignedTo = task.AssignedTo;
 
-        await pool.request()
+        // 1. تحديث المهمة
+        await new sql.Request(transaction)
             .input('TaskID', sql.Int, id)
             .input('AssignedTo', sql.NVarChar, assignedToUserId || null)
             .query('UPDATE Tasks SET AssignedTo = @AssignedTo WHERE TaskID = @TaskID');
 
+        // 2. تسجيل النقل في سجل الدفعات (TaskTransferBatches)
+        // نعتبر هذا "دفعة نقل" حتى لو كان عنصراً واحداً
+        if (assignedByUserId && (previousAssignedTo !== assignedToUserId)) {
+             const batchResult = await new sql.Request(transaction)
+                .input('FromUserID', sql.NVarChar, previousAssignedTo || null) // قد يكون null إذا لم تكن مسندة
+                .input('ToUserID', sql.NVarChar, assignedToUserId || null)
+                .input('CreatedBy', sql.NVarChar, assignedByUserId)
+                .query(`
+                    INSERT INTO TaskTransferBatches (FromUserID, ToUserID, CreatedBy)
+                    OUTPUT INSERTED.BatchID
+                    VALUES (@FromUserID, @ToUserID, @CreatedBy)
+                `);
+            
+            const batchId = batchResult.recordset[0].BatchID;
+
+            // 3. تسجيل تفاصيل العنصر المنقول (TaskTransferItems)
+            await new sql.Request(transaction)
+                .input('BatchID', sql.Int, batchId)
+                .input('TableName', sql.NVarChar, 'Tasks')
+                .input('RecordID', sql.Int, id)
+                .input('ColumnName', sql.NVarChar, 'AssignedTo')
+                .input('OldValue', sql.NVarChar, previousAssignedTo ? String(previousAssignedTo) : null)
+                .query(`
+                    INSERT INTO TaskTransferItems (BatchID, TableName, RecordID, ColumnName, OldValue)
+                    VALUES (@BatchID, @TableName, @RecordID, @ColumnName, @OldValue)
+                `);
+        }
+
+        // 4. إشعار الإسناد (كما كان سابقاً)
         if (assignedToUserId && assignedToUserId !== previousAssignedTo && assignedByUserId) {
-            await pool.request()
+            await new sql.Request(transaction)
                 .input('TaskID', sql.Int, id)
                 .input('AssignedToUserID', sql.NVarChar, assignedToUserId)
                 .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
@@ -126,8 +167,12 @@ exports.assignTask = async (req, res) => {
                 `);
         }
 
+        await transaction.commit();
         res.status(200).json({ message: 'Task assigned successfully' });
     } catch (error) {
+        if (transaction._aborted === false) {
+             await transaction.rollback();
+        }
         console.error('Error assigning task:', error);
         res.status(500).send({ message: 'Error assigning task' });
     }
@@ -574,7 +619,22 @@ exports.updateTaskView = async (req, res) => {
 exports.updateTaskUrl = async (req, res) => {
     const pool = req.app.locals.db;
     const { id } = req.params;
-    let { url, Description } = req.body;
+    let { url, Description, userId, isAdmin } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
+
+    try {
+        // التحقق من الصلاحية
+        const accessCheck = await checkTaskAccess(pool, id, userId, isAdmin === true || isAdmin === 'true', 'edit');
+        if (!accessCheck.hasAccess) {
+            return res.status(403).json({ message: accessCheck.reason || 'ليس لديك صلاحية لتعديل هذه المهمة' });
+        }
+    } catch (error) {
+        console.error('ACCESS CHECK ERROR:', error);
+        return res.status(500).json({ message: 'Error checking access permissions' });
+    }
 
     // قبول إفراغ الرابط بإرسال قيمة فارغة
     if (url !== undefined && typeof url === 'string') {
@@ -635,7 +695,11 @@ exports.updateTaskUrl = async (req, res) => {
 exports.updateTaskTitle = async (req, res) => {
     const pool = req.app.locals.db;
     const { id } = req.params;
-    let { Title } = req.body;
+    let { Title, userId, isAdmin } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
 
     if (typeof Title !== 'string') {
         return res.status(400).json({ message: 'Title is required and must be a string.' });
@@ -644,6 +708,17 @@ exports.updateTaskTitle = async (req, res) => {
     Title = Title.trim();
     if (!Title) {
         return res.status(400).json({ message: 'Title cannot be empty.' });
+    }
+
+    try {
+        // التحقق من الصلاحية
+        const accessCheck = await checkTaskAccess(pool, id, userId, isAdmin === true || isAdmin === 'true', 'edit');
+        if (!accessCheck.hasAccess) {
+            return res.status(403).json({ message: accessCheck.reason || 'ليس لديك صلاحية لتعديل هذه المهمة' });
+        }
+    } catch (error) {
+        console.error('ACCESS CHECK ERROR:', error);
+        return res.status(500).json({ message: 'Error checking access permissions' });
     }
 
     let encryptedTitle;
@@ -780,9 +855,19 @@ exports.getTasksWithNotifications = async (req, res) => {
 exports.updateTaskCategory = async (req, res) => {
     const pool = req.app.locals.db;
     const { taskId } = req.params;
-    const { CategoryID } = req.body;
+    const { CategoryID, userId, isAdmin } = req.body;
     
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
+
     try {
+        // التحقق من الصلاحية
+        const accessCheck = await checkTaskAccess(pool, taskId, userId, isAdmin === true || isAdmin === 'true', 'edit');
+        if (!accessCheck.hasAccess) {
+            return res.status(403).json({ message: accessCheck.reason || 'ليس لديك صلاحية لتعديل هذه المهمة' });
+        }
+
         const request = pool.request();
         request.input('TaskID', sql.Int, taskId);
         request.input('CategoryID', sql.Int, CategoryID);
@@ -872,6 +957,9 @@ exports.getCompletedTasks = async (req, res) => {
         res.status(500).send({ message: 'Error fetching completed tasks' });
     }
 };
+
+// الحصول على سجل تنقلات المهمة - REMOVED
+// exports.getTaskTransferHistory was here
 
 // البحث في المهام المكتملة في قاعدة البيانات (العنوان، التفاصيل، المهام الفرعية، التعليقات)
 exports.searchCompletedTasks = async (req, res) => {

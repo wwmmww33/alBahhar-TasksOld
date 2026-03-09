@@ -35,7 +35,20 @@ exports.getAllProcedures = async (req, res) => {
     }
 
     const result = await request.query(query);
-    res.status(200).json(result.recordset);
+    
+    // فك تشفير العناوين قبل إرسالها للعميل
+    const procedures = result.recordset.map(proc => {
+      if (proc.Title) {
+        try {
+          proc.Title = encryptionConfig.decrypt(proc.Title);
+        } catch (e) {
+          // في حالة الفشل، نبقي النص كما هو (قد يكون نصاً غير مشفر)
+        }
+      }
+      return proc;
+    });
+
+    res.status(200).json(procedures);
   } catch (error) { 
     console.error('DATABASE GET PROCEDURES ERROR:', error); 
     res.status(500).send({ message: 'Error fetching procedures' }); 
@@ -58,7 +71,15 @@ exports.getProcedureById = async (req, res) => {
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: 'Procedure not found' });
     }
-    res.status(200).json(result.recordset[0]);
+    
+    const procedure = result.recordset[0];
+    if (procedure.Title) {
+      try {
+        procedure.Title = encryptionConfig.decrypt(procedure.Title);
+      } catch (e) {}
+    }
+
+    res.status(200).json(procedure);
   } catch (error) {
     res.status(500).send({ message: 'Error fetching procedure details' });
   }
@@ -92,8 +113,15 @@ exports.createProcedure = async (req, res) => {
     const transaction = new sql.Transaction(pool);
     try {
         await transaction.begin();
+        
+        // تشفير العنوان قبل الحفظ
+        const encTitle = encryptionConfig.encrypt(Title);
+
         const procResult = await new sql.Request(transaction)
-            .input('Title', sql.NVarChar, Title).input('CreatedBy', sql.NVarChar, CreatedBy).input('DepartmentID', sql.Int, DepartmentID).input('IsPublic', sql.Bit, IsPublic)
+            .input('Title', sql.NVarChar, encTitle)
+            .input('CreatedBy', sql.NVarChar, CreatedBy)
+            .input('DepartmentID', sql.Int, DepartmentID)
+            .input('IsPublic', sql.Bit, IsPublic)
             .query(`INSERT INTO Procedures (Title, CreatedBy, DepartmentID, IsPublic) OUTPUT INSERTED.ProcedureID VALUES (@Title, @CreatedBy, @DepartmentID, @IsPublic);`);
         const newProcedureId = procResult.recordset[0].ProcedureID;
         if (subtasks && subtasks.length > 0) {
@@ -127,8 +155,13 @@ exports.updateProcedure = async (req, res) => {
     try {
         await transaction.begin();
 
+        // تشفير العنوان قبل التحديث
+        const encTitle = encryptionConfig.encrypt(Title);
+
         await new sql.Request(transaction)
-            .input('ProcedureID', sql.Int, id).input('Title', sql.NVarChar, Title).input('IsPublic', sql.Bit, IsPublic)
+            .input('ProcedureID', sql.Int, id)
+            .input('Title', sql.NVarChar, encTitle)
+            .input('IsPublic', sql.Bit, IsPublic)
             .query('UPDATE Procedures SET Title = @Title, IsPublic = @IsPublic WHERE ProcedureID = @ProcedureID');
 
         await new sql.Request(transaction).input('ProcedureID', sql.Int, id).query('DELETE FROM ProcedureSubtasks WHERE ProcedureID = @ProcedureID');

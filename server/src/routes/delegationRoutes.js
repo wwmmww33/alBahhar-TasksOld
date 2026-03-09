@@ -9,7 +9,6 @@ router.get('/as-delegate', delegationController.getDelegationsAsDelegate);
 router.post('/', delegationController.createDelegation);
 router.put('/:id', delegationController.updateDelegation);
 router.delete('/:id', delegationController.deleteDelegation);
-router.post('/transfer-user', delegationController.transferUserData);
 
 // إدارة الرمز السري للتفويض
 router.get('/secret', delegationController.getDelegationSecret);

@@ -7,6 +7,7 @@ router.get('/', subtaskController.getAllSubtasks);
 router.post('/', subtaskController.createSubtask);
 router.patch('/:subtaskId', subtaskController.updateSubtaskStatus);
 router.patch('/:subtaskId/assign', subtaskController.assignSubtask);
+router.post('/:subtaskId/bulk-assign', subtaskController.bulkAssignSubtask);
 // تحديث نص المهمة الفرعية وتاريخ الاستحقاق
 router.patch('/:subtaskId/details', subtaskController.updateSubtaskDetails);
 // تبديل إظهار المهمة الفرعية في التقويم

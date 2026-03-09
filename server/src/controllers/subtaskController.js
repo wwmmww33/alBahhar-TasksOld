@@ -166,22 +166,119 @@ exports.assignSubtask = async (req, res) => {
       .query('UPDATE Subtasks SET AssignedTo = @AssignedTo WHERE SubtaskID = @SubtaskID');
 
     if (assignedToUserId && assignedToUserId !== previousAssignedTo && assignedByUserId) {
-      await pool.request()
-        .input('TaskID', sql.Int, subtask.TaskID)
-        .input('AssignedToUserID', sql.NVarChar, assignedToUserId)
+      // التحقق من وجود المستخدم المسند
+      const userCheck = await pool.request()
         .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
-        .query(`
-          INSERT INTO TaskAssignmentNotifications 
-          (TaskID, AssignedToUserID, AssignedByUserID)
-          SELECT @TaskID, @AssignedToUserID, @AssignedByUserID
-          WHERE EXISTS (SELECT 1 FROM Users WHERE UserID = @AssignedByUserID)
-        `);
+        .query('SELECT UserID FROM Users WHERE UserID = @AssignedByUserID');
+      
+      if (userCheck.recordset.length > 0) {
+        await pool.request()
+          .input('TaskID', sql.Int, subtask.TaskID)
+          .input('AssignedToUserID', sql.NVarChar, assignedToUserId)
+          .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
+          .query(`
+            INSERT INTO TaskAssignmentNotifications 
+            (TaskID, AssignedToUserID, AssignedByUserID)
+            VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+          `);
+      }
     }
 
     res.status(200).json({ message: 'Subtask assigned successfully' });
   } catch (error) {
     console.error('Error assigning subtask:', error);
     res.status(500).send({ message: 'Error assigning subtask' });
+  }
+};
+
+exports.bulkAssignSubtask = async (req, res) => {
+  const pool = req.app.locals.db;
+  const { subtaskId } = req.params;
+  const { assignedToUserIds, assignedByUserId } = req.body;
+
+  if (!Array.isArray(assignedToUserIds) || assignedToUserIds.length === 0) {
+    return res.status(400).json({ message: 'assignedToUserIds array is required.' });
+  }
+
+  try {
+    // 1. Get original subtask details
+    const subtaskResult = await pool.request()
+      .input('SubtaskID', sql.Int, subtaskId)
+      .query('SELECT * FROM Subtasks WHERE SubtaskID = @SubtaskID');
+    
+    if (subtaskResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Subtask not found' });
+    }
+
+    const originalSubtask = subtaskResult.recordset[0];
+    const firstUserId = assignedToUserIds[0];
+    const otherUserIds = assignedToUserIds.slice(1);
+
+    // 2. Assign the original subtask to the first user
+    await pool.request()
+      .input('SubtaskID', sql.Int, subtaskId)
+      .input('AssignedTo', sql.NVarChar, firstUserId)
+      .query('UPDATE Subtasks SET AssignedTo = @AssignedTo WHERE SubtaskID = @SubtaskID');
+
+    // Notification for first user
+    if (firstUserId !== originalSubtask.AssignedTo && assignedByUserId) {
+       const userCheck = await pool.request()
+        .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
+        .query('SELECT UserID FROM Users WHERE UserID = @AssignedByUserID');
+       
+       if (userCheck.recordset.length > 0) {
+         await pool.request()
+          .input('TaskID', sql.Int, originalSubtask.TaskID)
+          .input('AssignedToUserID', sql.NVarChar, firstUserId)
+          .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
+          .query(`
+            INSERT INTO TaskAssignmentNotifications 
+            (TaskID, AssignedToUserID, AssignedByUserID)
+            VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+          `);
+       }
+    }
+
+    // 3. Create copies for other users
+    for (const userId of otherUserIds) {
+      await pool.request()
+        .input('TaskID', sql.Int, originalSubtask.TaskID)
+        .input('Title', sql.NVarChar, originalSubtask.Title) // Already encrypted
+        .input('CreatedBy', sql.NVarChar, originalSubtask.CreatedBy)
+        .input('ActedBy', sql.NVarChar, originalSubtask.ActedBy)
+        .input('AssignedTo', sql.NVarChar, userId)
+        .input('DueDate', sql.Date, originalSubtask.DueDate)
+        .input('ShowInCalendar', sql.Bit, originalSubtask.ShowInCalendar)
+        .query(`
+          INSERT INTO Subtasks (TaskID, Title, CreatedBy, ActedBy, AssignedTo, IsCompleted, DueDate, CreatedAt, ShowInCalendar)
+          VALUES (@TaskID, @Title, @CreatedBy, @ActedBy, @AssignedTo, 0, @DueDate, GETDATE(), @ShowInCalendar);
+        `);
+        
+       // Notification for new copies
+       if (userId && assignedByUserId) {
+         const userCheck = await pool.request()
+          .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
+          .query('SELECT UserID FROM Users WHERE UserID = @AssignedByUserID');
+
+         if (userCheck.recordset.length > 0) {
+           await pool.request()
+            .input('TaskID', sql.Int, originalSubtask.TaskID)
+            .input('AssignedToUserID', sql.NVarChar, userId)
+            .input('AssignedByUserID', sql.NVarChar, assignedByUserId)
+            .query(`
+              INSERT INTO TaskAssignmentNotifications 
+              (TaskID, AssignedToUserID, AssignedByUserID)
+              VALUES (@TaskID, @AssignedToUserID, @AssignedByUserID)
+            `);
+         }
+       }
+    }
+
+    res.status(200).json({ message: 'Subtasks assigned/duplicated successfully' });
+
+  } catch (error) {
+    console.error('Error in bulk assignment:', error);
+    res.status(500).send({ message: 'Error in bulk assignment' });
   }
 };
 
