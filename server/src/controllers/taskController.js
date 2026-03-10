@@ -1,6 +1,6 @@
 // src/controllers/taskController.js
 const sql = require('mssql');
-const { getTasksQueryWithDelegation, checkTaskAccess, checkDelegationPermission, hasActiveDelegation } = require('../utils/delegationUtils');
+const { getTasksQueryWithDelegation, checkTaskAccess, checkDelegationPermission, hasActiveDelegation, getDelegatorsForUser } = require('../utils/delegationUtils');
 const encryptionConfig = require('../config/encryption.config');
 
 // التراجع عن دفعة نقل (إرجاع الإسناد السابق) - REMOVED
@@ -32,6 +32,141 @@ exports.getAllTasks = async (req, res) => {
     } catch (error) {
         console.error('DATABASE GET ALL TASKS ERROR:', error);
         res.status(500).send({ message: 'Error fetching tasks' });
+    }
+};
+
+exports.getTaskActivity = async (req, res) => {
+    const pool = req.app.locals.db;
+    const { userId, isAdmin, page, days } = req.query;
+
+    if (!userId) {
+        return res.status(401).json({ message: 'User identification is required.' });
+    }
+
+    const pageIndex = Math.max(parseInt(page, 10) || 0, 0);
+    const daysCount = Math.max(parseInt(days, 10) || 7, 1);
+
+    try {
+        const isAdminFlag = isAdmin === 'true';
+        let delegatorIds = [];
+
+        if (!isAdminFlag) {
+            const delegators = await getDelegatorsForUser(pool, userId);
+            delegatorIds = Array.isArray(delegators)
+                ? delegators.map(d => d.DelegatorUserID).filter(Boolean)
+                : [];
+        }
+
+        const escapedDelegatorIds = delegatorIds
+            .map(id => `'${String(id).replace(/'/g, "''")}'`)
+            .join(',');
+
+        const accessCondition = isAdminFlag
+            ? '1=1'
+            : `
+                (
+                    t.CreatedBy = @UserID
+                    OR t.AssignedTo = @UserID
+                    OR EXISTS (
+                        SELECT 1 FROM Subtasks s_access
+                        WHERE s_access.TaskID = t.TaskID AND s_access.AssignedTo = @UserID
+                    )
+                    ${escapedDelegatorIds ? ` OR t.CreatedBy IN (${escapedDelegatorIds})` : ''}
+                )
+            `;
+
+        const request = pool.request()
+            .input('UserID', sql.NVarChar, userId)
+            .input('PageIndex', sql.Int, pageIndex)
+            .input('DaysCount', sql.Int, daysCount);
+
+        const query = `
+            DECLARE @EndDate DateTime = DATEADD(day, -(@PageIndex * @DaysCount), GETDATE());
+            DECLARE @StartDate DateTime = DATEADD(day, -@DaysCount, @EndDate);
+
+            WITH Events AS (
+                SELECT
+                    'task' as ItemType,
+                    t.TaskID,
+                    t.Title as TaskTitle,
+                    t.Status as TaskStatus,
+                    t.CreatedAt as CreatedAt,
+                    t.CreatedBy as ActorID,
+                    creator.FullName as ActorName,
+                    t.AssignedTo as AssignedToID,
+                    assignee.FullName as AssignedToName,
+                    CAST(NULL as int) as SubtaskID,
+                    CAST(NULL as nvarchar(max)) as SubtaskTitle,
+                    CAST(NULL as int) as CommentID,
+                    CAST(NULL as nvarchar(max)) as CommentContent
+                FROM Tasks t
+                LEFT JOIN Users creator ON t.CreatedBy = creator.UserID
+                LEFT JOIN Users assignee ON t.AssignedTo = assignee.UserID
+                WHERE ${accessCondition}
+                AND t.CreatedAt >= @StartDate AND t.CreatedAt <= @EndDate
+
+                UNION ALL
+
+                SELECT
+                    'subtask' as ItemType,
+                    t.TaskID,
+                    t.Title as TaskTitle,
+                    t.Status as TaskStatus,
+                    s.CreatedAt as CreatedAt,
+                    s.CreatedBy as ActorID,
+                    subCreator.FullName as ActorName,
+                    s.AssignedTo as AssignedToID,
+                    subAssignee.FullName as AssignedToName,
+                    s.SubtaskID as SubtaskID,
+                    s.Title as SubtaskTitle,
+                    CAST(NULL as int) as CommentID,
+                    CAST(NULL as nvarchar(max)) as CommentContent
+                FROM Subtasks s
+                INNER JOIN Tasks t ON s.TaskID = t.TaskID
+                LEFT JOIN Users subCreator ON s.CreatedBy = subCreator.UserID
+                LEFT JOIN Users subAssignee ON s.AssignedTo = subAssignee.UserID
+                WHERE ${accessCondition}
+                AND s.CreatedAt >= @StartDate AND s.CreatedAt <= @EndDate
+
+                UNION ALL
+
+                SELECT
+                    'comment' as ItemType,
+                    t.TaskID,
+                    t.Title as TaskTitle,
+                    t.Status as TaskStatus,
+                    c.CreatedAt as CreatedAt,
+                    c.UserID as ActorID,
+                    commenter.FullName as ActorName,
+                    CAST(NULL as nvarchar(50)) as AssignedToID,
+                    CAST(NULL as nvarchar(100)) as AssignedToName,
+                    CAST(NULL as int) as SubtaskID,
+                    CAST(NULL as nvarchar(max)) as SubtaskTitle,
+                    c.CommentID as CommentID,
+                    c.Content as CommentContent
+                FROM Comments c
+                INNER JOIN Tasks t ON c.TaskID = t.TaskID
+                LEFT JOIN Users commenter ON c.UserID = commenter.UserID
+                WHERE ${accessCondition}
+                AND c.CreatedAt >= @StartDate AND c.CreatedAt <= @EndDate
+            )
+            SELECT *
+            FROM Events
+            ORDER BY CreatedAt DESC
+        `;
+
+        const result = await request.query(query);
+        const items = (result.recordset || []).map(r => {
+            try { if (r.TaskTitle) r.TaskTitle = encryptionConfig.decrypt(r.TaskTitle); } catch (_) {}
+            try { if (r.SubtaskTitle) r.SubtaskTitle = encryptionConfig.decrypt(r.SubtaskTitle); } catch (_) {}
+            try { if (r.CommentContent) r.CommentContent = encryptionConfig.decrypt(r.CommentContent); } catch (_) {}
+            return r;
+        });
+
+        return res.status(200).json(items);
+    } catch (error) {
+        console.error('DATABASE GET TASK ACTIVITY ERROR:', error);
+        return res.status(500).json({ message: 'Error fetching task activity' });
     }
 };
 

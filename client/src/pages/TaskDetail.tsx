@@ -4,7 +4,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import UnifiedTimeline from '../components/UnifiedTimeline';
 import { useNotification } from '../contexts/NotificationContext';
 import type { CurrentUser, Subtask, User, Category, Task, Comment } from '../types';
-import { Trash2, ExternalLink } from 'lucide-react';
+import { Trash2, ExternalLink, Copy, Check } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { getActiveUserId } from '../utils/activeAccount';
 
@@ -36,6 +36,17 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState<string>('');
   const [isUpdatingTitle, setIsUpdatingTitle] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
 
   const fetchAllDetails = useCallback(async () => {
     if (!taskId) return;
@@ -523,15 +534,25 @@ const TaskDetail = ({ currentUser }: TaskDetailProps) => {
             ) : (
               <div className="flex items-center gap-2">
                 {(task as any)?.URL ? (
-                  <a
-                    href={(task as any).URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline flex items-center gap-1 text-sm"
-                  >
-                    <ExternalLink size={14} />
-                    فتح الرابط
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={(task as any).URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline flex items-center gap-1 text-sm"
+                    >
+                      <ExternalLink size={14} />
+                      فتح الرابط
+                    </a>
+                    <button
+                      onClick={() => copyToClipboard((task as any).URL)}
+                      className="text-primary hover:underline flex items-center gap-1 text-sm"
+                      title={isCopied ? "تم النسخ" : "نسخ الرابط"}
+                    >
+                      {isCopied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                      <span>{isCopied ? "تم النسخ" : "نسخ الرابط"}</span>
+                    </button>
+                  </div>
                 ) : (
                   <span className="text-content-secondary italic">لا يوجد رابط</span>
                 )}
